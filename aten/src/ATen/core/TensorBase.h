@@ -628,6 +628,7 @@ class TORCH_API TensorBase {
     return mutable_data_ptr();
   }
 
+  // Implemented in aten/src/ATen/templates/TensorMethods.cpp
   template <typename T>
   const T* const_data_ptr() const;
 
