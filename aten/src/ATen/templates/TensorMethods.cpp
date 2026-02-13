@@ -18,18 +18,16 @@ void check_type(const TensorBase& tensor, ScalarType type, std::string_view type
 
 } // namespace
 
+template <typename T>
+TORCH_API const T* TensorBase::const_data_ptr() const {
+  constexpr ScalarType scalar_t = c10::CppTypeToScalarType<T>::value;
+  check_type(*this, scalar_t, toString(scalar_t));
+  return this->unsafeGetTensorImpl()->data_ptr_impl<std::remove_const_t<T>>();
+}
+
 #define DEFINE_CAST(T, name)                                         \
-   template <>                                                       \
-   TORCH_API const T* TensorBase::const_data_ptr() const {           \
-     check_type(*this, ScalarType::name, #name);                     \
-     return this->unsafeGetTensorImpl()->data_ptr_impl<T>();         \
-   }                                                                 \
-                                                                     \
-   template <>                                                       \
-   TORCH_API const T* TensorBase::const_data_ptr<const T>() const {  \
-     check_type(*this, ScalarType::name, #name);                     \
-     return this->unsafeGetTensorImpl()->data_ptr_impl<std::remove_const_t<T>>(); \
-   }                                                                 \
+   template const T* TensorBase::const_data_ptr<T>() const;          \
+   template const T* TensorBase::const_data_ptr<const T>() const;    \
                                                                      \
    template <>                                                       \
    TORCH_API T* TensorBase::mutable_data_ptr() const {               \
