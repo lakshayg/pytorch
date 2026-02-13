@@ -19,28 +19,28 @@ void check_type(const TensorBase& tensor, ScalarType type) {
 } // namespace
 
 template <typename T>
-TORCH_API const T* TensorBase::const_data_ptr() const {
+const T* TensorBase::const_data_ptr() const {
   using NonConstT = std::remove_const_t<T>;
   check_type(*this, c10::CppTypeToScalarType<NonConstT>());
   return this->unsafeGetTensorImpl()->data_ptr_impl<NonConstT>();
 }
 
 template <typename T>
-TORCH_API T* TensorBase::mutable_data_ptr() const {
+T* TensorBase::mutable_data_ptr() const {
   check_type(*this, c10::CppTypeToScalarType<T>());
   return this->unsafeGetTensorImpl()->mutable_data_ptr_impl<T>();
 }
 
 template <typename T>
-TORCH_API T* TensorBase::data_ptr() const {
+T* TensorBase::data_ptr() const {
   return this->mutable_data_ptr<T>();
 }
 
-#define DEFINE_CAST(T, name)                                         \
-   template const T* TensorBase::const_data_ptr<T>() const;          \
-   template const T* TensorBase::const_data_ptr<const T>() const;    \
-   template T* TensorBase::mutable_data_ptr() const;                 \
-   template T* TensorBase::data_ptr() const;
+#define DEFINE_CAST(T, name)                                                \
+   template TORCH_API const T* TensorBase::const_data_ptr<T>() const;       \
+   template TORCH_API const T* TensorBase::const_data_ptr<const T>() const; \
+   template TORCH_API T* TensorBase::mutable_data_ptr() const;              \
+   template TORCH_API T* TensorBase::data_ptr() const;
 
  AT_FORALL_SCALAR_TYPES_WITH_COMPLEX(DEFINE_CAST)
  AT_FORALL_QINT_TYPES(DEFINE_CAST)
