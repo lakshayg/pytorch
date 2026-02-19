@@ -26,9 +26,11 @@ class CUDAGraphCaptureControlFlowOpDispatchMode(TorchDispatchMode):
         kwargs=None,
     ):
         if func is torch.ops.higher_order.cond:
-            # Re-enter the mode to support nested conditionals
             with self:
                 return if_else_node(*args)
+        if func is torch.ops.higher_order.switch:
+            with self:
+                return switch_node(*args)
         kwargs = {} if kwargs is None else kwargs
         return func(*args, **kwargs)
 
@@ -66,13 +68,9 @@ class ControlFlowOpWarmupDispatchMode(TorchDispatchMode):
     ):
         kwargs = {} if kwargs is None else kwargs
 
-        # Warm up both sides of this torch.cond()
         if func is torch.ops.higher_order.cond:
             if torch.cuda.is_current_stream_capturing():
-                # This is a call to torch.cond() nested within either
-                # another torch.cond() function.
                 with self:
-                    # We re-enter the mode in case of nested calls to torch.cond()
                     return if_else_node(*args)
             else:
                 with (
@@ -85,10 +83,24 @@ class ControlFlowOpWarmupDispatchMode(TorchDispatchMode):
                     self,
                 ):
                     if_else_node(*args)
-
                 return func(*args, **kwargs)
-        else:
-            return func(*args, **kwargs)
+        if func is torch.ops.higher_order.switch:
+            if torch.cuda.is_current_stream_capturing():
+                with self:
+                    return switch_node(*args)
+            else:
+                with (
+                    torch.cuda.graph(
+                        torch.cuda.CUDAGraph(),
+                        pool=None,
+                        stream=self.capture_stream,
+                        capture_error_mode="relaxed",
+                    ),
+                    self,
+                ):
+                    switch_node(*args)
+                return func(*args, **kwargs)
+        return func(*args, **kwargs)
 
 
 @contextmanager
@@ -106,8 +118,6 @@ def if_else_node(pred: torch.Tensor, true_fn, false_fn, operands):
         raise ValueError(
             "Conditions must be on a cuda device to use conditional node in cuda graphs"
         )
-    # if-else is not supported until CUDA 12.8. Therefore, we use two
-    # if conditions, where one evaluates !pred
     outs = []
 
     for lazy_pred, fn in [
@@ -116,15 +126,45 @@ def if_else_node(pred: torch.Tensor, true_fn, false_fn, operands):
     ]:
         with _if_body(lazy_pred()):
             outs.append(fn(*operands))
-
-            # The output of the else branch gets copied into the
-            # output of the if branch. This is done because the rest
-            # of the cudagraph after the conditional node has fixed
-            # inputs, so we need to merge the two outputs into a
-            # single output.
             if len(outs) == 2:
                 for if_out, else_out in zip(
                     pytree.tree_iter(outs[0]), pytree.tree_iter(outs[1])
                 ):
                     if_out.copy_(else_out)
+    return outs[0]
+
+
+def switch_node(index: torch.Tensor, branches: tuple, operands):
+    if not index.is_cuda:
+        raise ValueError(
+            "switch index must be on a cuda device to use conditional nodes in cuda graphs"
+        )
+    branches = tuple(branches)
+    current_cuda_graph = torch.cuda.CUDAGraph.get_currently_capturing_graph()
+    if hasattr(current_cuda_graph, "begin_capture_to_switch_node"):
+        current_cuda_graph.begin_capture_to_switch_node(index, len(branches))
+        outs = []
+        for i, fn in enumerate(branches):
+            if i >= 1:
+                current_cuda_graph.begin_capture_to_switch_branch(i)
+            try:
+                outs.append(fn(*operands))
+                if i >= 1:
+                    for a, b in zip(
+                        pytree.tree_iter(outs[0]), pytree.tree_iter(outs[-1])
+                    ):
+                        a.copy_(b)
+            finally:
+                current_cuda_graph.end_capture_to_conditional_node()
+        return outs[0]
+    outs = []
+    for i, fn in enumerate(branches):
+        pred = (index == i).reshape([])
+        with _if_body(pred):
+            outs.append(fn(*operands))
+            if len(outs) >= 2:
+                for first_out, branch_out in zip(
+                    pytree.tree_iter(outs[0]), pytree.tree_iter(outs[-1])
+                ):
+                    first_out.copy_(branch_out)
     return outs[0]

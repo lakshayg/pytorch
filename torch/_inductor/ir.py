@@ -9168,6 +9168,156 @@ class Conditional(ExternKernel):
             return OrderedSet()
 
 
+@ir_dataclass(frozen=False)
+class Switch(ExternKernel):
+    """
+    IR node representing torch.switch (N-way branch by index, like jax.lax.switch).
+    """
+
+    index: Optional[IRNode] = None
+    operands: Optional[Sequence[IRNode]] = None
+    branch_subgraphs: Optional[Sequence[Subgraph]] = None
+    outputs: Optional[Sequence[MultiOutput]] = None
+
+    def __init__(
+        self,
+        index: IRNode,
+        operands: Sequence[IRNode],
+        branch_subgraphs: Sequence[Subgraph],
+        layout: MultiOutputLayout,
+        unbacked_bindings: Optional[dict[sympy.Symbol, pytree.KeyPath]],
+    ) -> None:
+        self.index = index
+        self.operands = operands
+        self.branch_subgraphs = branch_subgraphs
+        sym_args, tensor_args = _split_by_sym_type([index, *operands])
+        super().__init__(
+            name=None,
+            layout=layout,
+            inputs=tensor_args,
+            constant_args=sym_args,
+        )
+        if unbacked_bindings is not None:
+            self.unbacked_bindings = unbacked_bindings
+        self.name = V.graph.register_buffer(self)
+        V.graph.register_operation(self)
+
+    @staticmethod
+    def _maybe_expr(s: Union[int, torch.SymInt]) -> Union[int, sympy.Expr]:
+        if isinstance(s, int):
+            return s
+        return s.node.expr
+
+    @classmethod
+    def create(
+        cls,
+        index: TensorBox,
+        branch_fns: Sequence[Subgraph],
+        operands: list[TensorBox],
+    ) -> list[MultiOutput]:
+        index_ir = cls.realize_input(index)
+        operands_ir = [cls.realize_input(x) for x in operands]
+        fx_operands: Argument = V.graph.current_node.args[-1]
+        assert isinstance(fx_operands, Sequence), type(fx_operands)
+        assert all(isinstance(n, Node) for n in fx_operands)
+        fake_operands = [cast(Node, x).meta["val"] for x in fx_operands]
+        fake_outputs = V.graph.current_node.meta["val"]
+
+        def _require_exact_strides(
+            graph_outputs: Sequence[IRNode],
+            fake_tensors: Sequence[torch.Tensor],
+        ) -> list[IRNode]:
+            ret = []
+            for output, fake in zip(graph_outputs, fake_tensors):
+                if isinstance(output, ShapeAsConstantBuffer):
+                    ret.append(output)
+                else:
+                    ret.append(
+                        ExternKernel.require_exact_strides(
+                            TensorBox(output), fake.stride(), allow_padding=False
+                        )
+                    )
+            return ret
+
+        for subgraph in branch_fns:
+            if subgraph.graph is None:
+                subgraph.graph = V.graph.make_subgraph(
+                    gm=subgraph.graph_module,
+                    example_inputs=fake_operands,
+                    subgraph_name=subgraph.name,
+                )
+                with V.set_graph_handler(subgraph.graph):
+                    subgraph.graph.run(*fake_operands)
+                    subgraph.graph.graph_outputs = _require_exact_strides(
+                        subgraph.graph.graph_outputs, fake_outputs
+                    )
+
+        ref_outputs = branch_fns[0].graph.graph_outputs
+        for i, sg in enumerate(branch_fns):
+            assert sg.graph is not None
+            if _has_aliased_buffers(sg.graph.graph_outputs):
+                raise AssertionError(
+                    f"Output aliasing not supported in torch.switch branch {i}"
+                )
+            assert len(sg.graph.graph_outputs) == len(ref_outputs)
+            for j, (o, ref) in enumerate(zip(sg.graph.graph_outputs, ref_outputs)):
+                assert o.get_device() == ref.get_device(), (i, j, o, ref)
+                assert o.get_dtype() == ref.get_dtype(), (i, j, o, ref)
+                assert o.get_layout().offset == ref.get_layout().offset
+
+        device = next(
+            o.get_device()
+            for o in operands_ir + [index_ir]
+            if not isinstance(o, ShapeAsConstantBuffer)
+        )
+        assert device is not None
+        unbacked_bindings = resolve_unbacked_bindings(
+            V.graph.sizevars.shape_env,
+            V.graph.current_node.meta.get("unbacked_bindings", None),
+        )
+        switch_ir = Switch(
+            index=index_ir,
+            operands=operands_ir,
+            branch_subgraphs=tuple(branch_fns),
+            layout=MultiOutputLayout(device=device),
+            unbacked_bindings=unbacked_bindings,
+        )
+        outputs = [
+            MultiOutput(
+                FixedLayout(
+                    device=output.get_device() or device,
+                    dtype=output.get_dtype(),
+                    size=[Switch._maybe_expr(sz) for sz in merged_output.size()],
+                    stride=[Switch._maybe_expr(sz) for sz in merged_output.stride()],
+                    offset=output.get_layout().offset,
+                    is_pinned=output.get_layout().is_pinned,
+                ),
+                switch_ir,
+                [(list, i)],
+            )
+            for i, (output, merged_output) in enumerate(
+                zip(ref_outputs, V.graph.current_node.meta["val"])
+            )
+        ]
+        switch_ir.outputs = outputs
+        return outputs
+
+    def codegen(self, wrapper: PythonWrapperCodegen) -> None:
+        wrapper.codegen_switch(self)
+        wrapper.codegen_unbacked_symbol_defs_for_outputs(
+            self.get_name(), self.outputs, getattr(self, "unbacked_bindings", {})
+        )
+
+    def get_unbacked_symbol_defs(self) -> OrderedSet[sympy.Symbol]:
+        if unbacked_bindings := getattr(self, "unbacked_bindings", None):
+            resolved = resolve_unbacked_bindings(
+                V.graph.sizevars.shape_env, unbacked_bindings
+            )
+            assert resolved is not None
+            return OrderedSet(resolved.keys())
+        return OrderedSet()
+
+
 def _split_by_sym_type(
     args: list[Any],
 ) -> tuple[list[ShapeAsConstantBuffer], list[Any]]:

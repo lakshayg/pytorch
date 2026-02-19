@@ -480,6 +480,19 @@ class ConditionalLine(WrapperLine):
 
 
 @dataclasses.dataclass
+class SwitchLine(WrapperLine):
+    wrapper: PythonWrapperCodegen
+    node: ir.Switch
+
+    def codegen(self, code: IndentedBuffer) -> None:
+        raise NotImplementedError("Only supports FX codegen")
+
+    @staticmethod
+    def codegen_fx(converter: FxConverter) -> FxConversionFunc:
+        return converter._generate_switch
+
+
+@dataclasses.dataclass
 class CommentLine(WrapperLine):
     line: LineContext
 
@@ -3718,6 +3731,25 @@ class PythonWrapperCodegen(CodeGen):
             )
         else:
             self.codegen_subgraph(invoke_subgraph.subgraph, outer_inputs, name)
+
+    def codegen_switch(self, switch_node) -> None:
+        name = switch_node.get_name()
+        outer_inputs = [buf.codegen_reference() for buf in switch_node.operands]
+        index_ref = switch_node.index.codegen_reference()
+        if not isinstance(switch_node.index, ir.ShapeAsConstantBuffer):
+            index_ref = f"{index_ref}.item()"
+        self.writeline(f"{name} = [None] * {len(switch_node.outputs)}")
+        branches = switch_node.branch_subgraphs
+        for i, subgraph in enumerate(branches):
+            prefix = "if" if i == 0 else "elif"
+            self.writeline(f"{prefix} {index_ref} == {i}:")
+            self.writeline(EnterSubgraphLine(self, subgraph.graph))
+            if V.graph.aot_mode:
+                outer_outputs = [f"{name}[{j}]" for j in range(len(switch_node.outputs))]
+                self.codegen_subgraph_by_inlining(subgraph, outer_inputs, outer_outputs)
+            else:
+                self.codegen_subgraph(subgraph, outer_inputs, name)
+            self.writeline(ExitSubgraphLine(self))
 
     def codegen_conditional(self, conditional) -> None:
         name = conditional.get_name()

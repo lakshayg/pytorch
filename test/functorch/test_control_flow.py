@@ -608,6 +608,58 @@ def forward(self, pred_1, x_1):
     return (getitem_1,)""",  # noqa: B950
         )
 
+    def test_switch_no_trace(self):
+        def branch0(x):
+            return x.sin()
+
+        def branch1(x):
+            return x.cos()
+
+        def branch2(x):
+            return x.tanh()
+
+        x = torch.randn(4)
+        result = torch.switch(1, (branch0, branch1, branch2), (x,))
+        self.assertEqual(result, torch.cos(x))
+
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    def test_switch_gpu(self):
+        def branch0(x):
+            return x.sin()
+
+        def branch1(x):
+            return x.cos()
+
+        x = torch.randn(4, device="cuda")
+        index = torch.tensor(1, device="cuda")
+        result = torch.switch(index, (branch0, branch1), (x,))
+        self.assertEqual(result, torch.cos(x))
+
+    def test_switch_autograd_simple(self):
+        def branch0(x):
+            return x.sin()
+
+        def branch1(x):
+            return x.cos()
+
+        def branch2(x):
+            return x.tanh()
+
+        for index, fn in zip(
+            [0, 1, 2],
+            [branch0, branch1, branch2],
+        ):
+            x = torch.randn(4, requires_grad=True)
+            result = torch.switch(
+                torch.tensor(index), (branch0, branch1, branch2), (x,)
+            )
+            self.assertEqual(result, fn(x))
+
+            grad_out = torch.ones_like(result)
+            grads = torch.autograd.grad(result, (x,), grad_out)
+            expected_grads = torch.autograd.grad(fn(x), (x,), grad_out)
+            self.assertEqual(expected_grads, grads)
+
     def test_cond_autograd_complex(self):
         def true_fn(x):
             return torch.abs((x**2).sin())

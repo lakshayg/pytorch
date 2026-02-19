@@ -6861,6 +6861,63 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         false_sin = graph(torch.tensor(False), torch.tensor([0.5, 0.5]))
         self.assertTrue(same(torch.sin(torch.tensor([0.5, 0.5])), false_sin))
 
+    def test_switch(self):
+        def branch0(x):
+            return x.sin()
+
+        def branch1(x):
+            return x.cos()
+
+        def branch2(x):
+            return x.tanh()
+
+        def f(index, x):
+            return torch.switch(index, (branch0, branch1, branch2), (x,))
+
+        opt_fn = torch.compile(f, backend="eager")
+        x = torch.tensor([0.25, 0.25])
+        self.assertTrue(same(torch.cos(x), opt_fn(torch.tensor(1), x)))
+        self.assertTrue(same(torch.sin(x), opt_fn(torch.tensor(0), x)))
+        self.assertTrue(same(torch.tanh(x), opt_fn(torch.tensor(2), x)))
+
+    def test_switch_nested(self):
+        def branch0_inner(x):
+            return x * 10
+
+        def branch1_inner(x):
+            return x * -1
+
+        def branch2_inner(x):
+            return x + 1
+
+        def branch0(index2, x):
+            return x.sin()
+
+        def branch1(index2, x):
+            return x + torch.switch(
+                index2, (branch0_inner, branch1_inner, branch2_inner), (x,)
+            )
+
+        def branch2(index2, x):
+            return x.cos()
+
+        def f(index, index2, x):
+            return torch.switch(index, (branch0, branch1, branch2), (index2, x))
+
+        cc = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(f, backend=cc)
+        x = torch.tensor([0.25, 0.25])
+        self.assertTrue(
+            same(torch.sin(x), opt_fn(torch.tensor(0), torch.tensor(0), x))
+        )
+        self.assertTrue(
+            same(torch.tensor([2.75, 2.75]), opt_fn(torch.tensor(1), torch.tensor(0), x))
+        )
+        self.assertTrue(
+            same(torch.tensor([0.0, 0.0]), opt_fn(torch.tensor(1), torch.tensor(1), x))
+        )
+        self.assertTrue(same(torch.cos(x), opt_fn(torch.tensor(2), torch.tensor(0), x)))
+
     def test_duplicate_graph_break_log(self):
         torch._logging.set_logs(graph_breaks=True)
 

@@ -7,6 +7,7 @@
 
 #include <ATen/cuda/CUDAGraph.h>
 #include <c10/cuda/CUDAGraphsC10Utils.h>
+#include <cuda_runtime_api.h>
 
 // Cargo culted partially from csrc/distributed/c10d/init.cpp
 // and partially from csrc/cuda/Stream.cpp.
@@ -25,7 +26,7 @@ void THCPGraph_init(PyObject* module) {
 
   torch_C_m.def("_graph_pool_handle", &::at::cuda::graph_pool_handle);
 
-  shared_ptr_class_<::at::cuda::CUDAGraph>(torch_C_m, "_CUDAGraph")
+  auto cudagraph_class = shared_ptr_class_<::at::cuda::CUDAGraph>(torch_C_m, "_CUDAGraph")
       .def(py::init<bool>(), py::arg("keep_graph") = false)
       .def(
           "capture_begin",
@@ -133,4 +134,18 @@ void THCPGraph_init(PyObject* module) {
               &::at::cuda::CUDAGraph::set_conditional_handle),
           py::arg("handle"),
           py::arg("scalar_cuda_pred_tensor"));
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
+  cudagraph_class
+      .def(
+          "begin_capture_to_switch_node",
+          torch::wrap_pybind_function_no_gil(
+              &::at::cuda::CUDAGraph::begin_capture_to_switch_node),
+          py::arg("scalar_cuda_index_tensor"),
+          py::arg("num_branches"))
+      .def(
+          "begin_capture_to_switch_branch",
+          torch::wrap_pybind_function_no_gil(
+              &::at::cuda::CUDAGraph::begin_capture_to_switch_branch),
+          py::arg("branch_index"));
+#endif
 }

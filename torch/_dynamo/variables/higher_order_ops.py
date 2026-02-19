@@ -2422,6 +2422,212 @@ class CondHigherOrderVariable(TorchHigherOrderOperatorVariable):
         )
 
 
+class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
+    _HOP_NAME = "torch.switch"
+    _ALLOW_FALLBACK_TO_EAGER = False
+    supports_input_mutation = False
+    supports_aliasing = False
+
+    def _call_function(
+        self,
+        tx: "InstructionTranslator",
+        args: Sequence[VariableTracker],
+        kwargs: dict[str, VariableTracker],
+    ) -> VariableTracker:
+        args, kwargs = LazyVariableTracker.realize_all((args, kwargs))
+
+        for i, k in enumerate(["index", "branches", "operands"]):
+            if v := kwargs.pop(k, None):
+                assert i == len(args)
+                args.append(v)
+
+        if len(args) != 3 or kwargs:
+            unimplemented(
+                gb_type="torch.switch: improper args/kwargs",
+                context=f"args: {args}, kwargs: {kwargs}",
+                explanation="torch.switch expects 3 positional arguments (index, branches, operands)",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+
+        index, branches_var, operands = args
+        if not isinstance(branches_var, (ListVariable, TupleVariable)):
+            unimplemented(
+                gb_type="torch.switch: branches must be list or tuple",
+                context=str(branches_var),
+                explanation="branches must be a list or tuple of callables",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+        branches_seq = branches_var.unpack_var_sequence(tx)
+        num_branches = len(branches_seq)
+        if num_branches == 0:
+            unimplemented(
+                gb_type="torch.switch: empty branches",
+                explanation="branches must be non-empty",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+
+        if type(index) is ConstantVariable:
+            idx = index.as_python_constant()
+            if 0 <= idx < num_branches:
+                return branches_seq[idx].call_function(
+                    tx, operands.unpack_var_sequence(tx), {}
+                )
+
+        if type(index.realize()) not in (
+            ConstantVariable,
+            TensorVariable,
+            SymNodeVariable,
+        ):
+            unimplemented(
+                gb_type="torch.switch: improper index",
+                context=str(index),
+                explanation="index must be int or 0-dim int tensor",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+
+        if not isinstance(operands, (ListVariable, TupleVariable)):
+            unimplemented(
+                gb_type="torch.switch: improper operands",
+                context=str(operands),
+                explanation="Expected `operands` to be a list/tuple "
+                f"but got {operands.python_type()}.",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+        operands_seq = operands.unpack_var_sequence(tx)
+        if not only_consist_of(
+            operands, (TensorVariable, ConstantVariable, SymNodeVariable)
+        ):
+            unimplemented(
+                gb_type="torch.switch: improper operands contents",
+                context=str(operands),
+                explanation="Expected `operands` to be a list/tuple of pytrees that only consists of tensor leaves.",
+                hints=[*graph_break_hints.USER_ERROR],
+            )
+
+        for b in branches_seq:
+            _check_supported_callable_arg(tx, b, "branch")
+
+        def speculate_branch(
+            branch_idx: int,
+        ) -> tuple[VariableTracker, OutputSpec, torch.fx.Graph, dict[Proxy, Proxy]]:
+            (ret_val, ret_spec), ret_graph, ret_lifted_freevars = speculate_subgraph(
+                tx,
+                branches_seq[branch_idx],
+                operands_seq,
+                {},
+                f"{self._HOP_NAME} branch {branch_idx}",
+                source_target=self.value,
+                should_flatten_outputs=True,
+                remove_consts_from_outputs=False,
+                supports_input_mutation=self.supports_input_mutation,
+                supports_aliasing=self.supports_aliasing,
+            )
+            assert tx.fake_mode is not None
+            tx.fake_mode.epoch += 1
+            if not only_consist_of(ret_val, (TensorVariable, ConstantVariable)):
+                unimplemented(
+                    gb_type="torch.switch: unsupported branch return type",
+                    context=str(ret_val),
+                    explanation="Branches must return tensors or constant ints.",
+                    hints=[*graph_break_hints.USER_ERROR],
+                )
+            return ret_val, ret_spec, ret_graph, ret_lifted_freevars
+
+        results = []
+        branch_nn_modules = []
+        for i in range(num_branches):
+            results.append(speculate_branch(i))
+            branch_nn_modules.append(dict(tx.output.nn_modules))
+
+        ref_spec = results[0][1].treespec
+        for i in range(1, num_branches):
+            if results[i][1].treespec != ref_spec:
+                unimplemented(
+                    gb_type="torch.switch: differing branch outputs",
+                    context=f"branch 0 vs branch {i}",
+                    explanation="All branches must return same pytree structure.",
+                    hints=[*graph_break_hints.USER_ERROR],
+                )
+
+        if num_branches == 1:
+            g0 = results[0][2]
+            lifted0 = results[0][3]
+            phs = [n for n in g0.nodes if n.op == "placeholder"]
+            combined_inputs = [next(k for k, v in lifted0.items() if v.node is ph) for ph in phs]
+            branch_graphs = [g0]
+        else:
+            current_g = results[0][2]
+            current_lifted = results[0][3]
+            branch_graphs = [current_g]
+            combined_inputs_list = []
+
+            for i in range(1, num_branches):
+                gi, li = results[i][2], results[i][3]
+                current_g, gi, shared, _, unique_current, unique_i = _merge_graph_inputs(
+                    current_g,
+                    current_lifted,
+                    f"switch_0",
+                    gi,
+                    li,
+                    f"switch_{i}",
+                )
+                combined_inputs = list(shared) + list(unique_current) + list(unique_i)
+                combined_inputs_list.append(combined_inputs)
+                placeholders = [n for n in current_g.nodes if n.op == "placeholder"]
+                current_lifted = {
+                    p: Proxy(ph, tx.output.tracer)
+                    for p, ph in zip(combined_inputs, placeholders)
+                }
+                branch_graphs.append(gi)
+
+            final_combined = combined_inputs_list[-1]
+            phs_g0 = [n for n in branch_graphs[0].nodes if n.op == "placeholder"]
+            current_lifted = {
+                p: Proxy(ph, tx.output.tracer)
+                for p, ph in zip(final_combined, phs_g0)
+            }
+            for i in range(1, num_branches):
+                gi_placeholders = [n for n in branch_graphs[i].nodes if n.op == "placeholder"]
+                gi_lifted = {
+                    p: Proxy(ph, tx.output.tracer)
+                    for p, ph in zip(combined_inputs_list[i - 1], gi_placeholders)
+                }
+                _merge_graph_inputs(
+                    branch_graphs[i],
+                    gi_lifted,
+                    f"switch_{i}",
+                    branch_graphs[0],
+                    current_lifted,
+                    "switch_final",
+                )
+            combined_inputs = final_combined
+
+        branch_names = []
+        for i in range(num_branches):
+            name = tx.output.install_subgraph(
+                f"switch_branch_{i}",
+                torch.fx.GraphModule(branch_nn_modules[i], branch_graphs[i]),
+            )
+            branch_names.append(name)
+
+        branch_nodes = [make_attr(tx, name) for name in branch_names]
+        flat_operands = (
+            tuple(combined_inputs)
+            if isinstance(combined_inputs, list)
+            else combined_inputs
+        )
+        p_args = (index.as_proxy(), tuple(branch_nodes), flat_operands)
+        return _call_function_and_unflatten_output(
+            tx,
+            torch.ops.higher_order.switch,
+            p_args,
+            {},
+            None,
+            results[0][1],
+            results[0][0],
+        )
+
+
 class CallTorchbindHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.call_torchbind"
 
@@ -5529,6 +5735,7 @@ class LocalMapWrappedHigherOrderVariable(WrapHigherOrderVariable):
 # Map operator names to their corresponding variable for fast TorchHigherOrderOperatorVariable.make()
 _hop_name_to_variable_class = {
     "cond": CondHigherOrderVariable,
+    "switch": SwitchHigherOrderVariable,
     "while_loop": WhileLoopHigherOrderVariable,
     "while_loop_stack_output": WhileLoopStackOutputHigherOrderVariable,
     "map_impl": MapHigherOrderVariable,

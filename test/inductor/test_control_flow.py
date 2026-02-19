@@ -812,6 +812,180 @@ class CondTests(TestCase):
         )
 
 
+class SwitchModels:
+    class Simple(torch.nn.Module):
+        def forward(self, index, a, b):
+            def branch0(x, y):
+                return x + y
+
+            def branch1(x, y):
+                return x - y
+
+            def branch2(x, y):
+                return x * y
+
+            return torch.switch(index, (branch0, branch1, branch2), (a, b))
+
+    class SimpleWithIntClosure(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.num = 3
+
+        def forward(self, index, a, b):
+            return torch.switch(
+                index,
+                (
+                    lambda a, b: [a + b + self.num],
+                    lambda a, b: [a - b - self.num],
+                    lambda a, b: [a * b * self.num],
+                ),
+                (a, b),
+            )
+
+    class MultipleOutputs(torch.nn.Module):
+        def forward(self, index, a, b, c):
+            def branch0(x, y, z):
+                return x * y, z / 2.71, (y - x).sum(dim=1)
+
+            def branch1(x, y, z):
+                return y / x, z * 3.14, (x + y).mean(dim=1)
+
+            def branch2(x, y, z):
+                return x + y, z - 1.0, (x * y).sum(dim=1)
+
+            return torch.switch(index, (branch0, branch1, branch2), [a, b, c])
+
+    class OuterCode(torch.nn.Module):
+        def forward(self, index, a, b):
+            c = a * b + 3.14
+            d = a / b - 2.71
+
+            def branch0(x, y):
+                return x + y
+
+            def branch1(x, y):
+                return x - y
+
+            def branch2(x, y):
+                return x * y
+
+            e = torch.switch(index, (branch0, branch1, branch2), (c, d))
+            return e * e / 1.41
+
+    class WithNonTensorIndex(torch.nn.Module):
+        def forward(self, a, b):
+            def branch0(x, y):
+                return x.sum(0) / 3.14
+
+            def branch1(x, y):
+                return y.sum(0) * 2.71
+
+            def branch2(x, y):
+                return (x + y).sum(0)
+
+            idx = 0 if a.size(0) > b.size(0) else (1 if a.size(0) < b.size(0) else 2)
+            return torch.switch(idx, (branch0, branch1, branch2), [a, b])
+
+
+class SwitchTests(TestCase):
+    def _run_test_switch(
+        self,
+        model,
+        inputs,
+        device,
+        dynamic=False,
+        num_branches=3,
+    ):
+        cnt = torch._dynamo.testing.CompileCounterWithBackend("inductor")
+        compiled_model = torch.compile(backend=cnt, fullgraph=True)(model)
+
+        inputs = [inp.to(device=device) for inp in inputs]
+        input_sets = [inputs]
+        if dynamic:
+            larger_inputs = []
+            for inp in inputs:
+                if inp.ndim > 0:
+                    tiling = [5] + [1] * (inp.ndim - 1)
+                    larger_inputs.append(torch.tile(inp, tiling))
+                else:
+                    larger_inputs.append(inp)
+            input_sets.append(larger_inputs)
+            for inp_set in input_sets:
+                for inp in inp_set:
+                    torch._dynamo.mark_dynamic(inp, 0)
+
+        counter_values = tuple(range(num_branches))
+        for inp_set in input_sets:
+            for inputs_with_index in prepend_counters(
+                inp_set, num_counters=1, counter_values=counter_values
+            ):
+                cloned_inputs = [inp.clone() for inp in inputs_with_index]
+                result = model(*inputs_with_index)
+                result_compiled = compiled_model(*inputs_with_index)
+                torch.testing.assert_close(cloned_inputs, inputs_with_index)
+                torch.testing.assert_close(result, result_compiled)
+
+        self.assertEqual(cnt.frame_count, 1, "only one compilation expected")
+
+    @requires_gpu
+    @parametrize("device", ["cpu", GPU_TYPE])
+    @parametrize("dynamic", [False, True])
+    def test_switch_simple_control_flow(self, device, dynamic):
+        self._run_test_switch(
+            model=SwitchModels.Simple(),
+            inputs=(torch.randn(10, 20), torch.randn(10, 20)),
+            device=device,
+            dynamic=dynamic,
+        )
+
+    @requires_gpu
+    @parametrize("device", ["cpu", GPU_TYPE])
+    def test_switch_simple_with_int_closure(self, device):
+        self._run_test_switch(
+            model=torch.compile(SwitchModels.SimpleWithIntClosure(), dynamic=True),
+            inputs=(torch.randn(10, 20), torch.randn(10, 20)),
+            device=device,
+        )
+
+    @requires_gpu
+    @parametrize("device", ["cpu", GPU_TYPE])
+    @parametrize("dynamic", [False, True])
+    def test_switch_multiple_outputs(self, device, dynamic):
+        self._run_test_switch(
+            model=SwitchModels.MultipleOutputs(),
+            inputs=(
+                torch.randn(10, 20),
+                torch.randn(10, 20),
+                torch.randn(30, 40),
+            ),
+            device=device,
+            dynamic=dynamic,
+        )
+
+    @requires_gpu
+    @parametrize("device", ["cpu", GPU_TYPE])
+    @parametrize("dynamic", [False, True])
+    def test_switch_outer_code_before_after(self, device, dynamic):
+        self._run_test_switch(
+            model=SwitchModels.OuterCode(),
+            inputs=(torch.randn(10, 20), torch.randn(10, 20)),
+            device=device,
+            dynamic=dynamic,
+        )
+
+    @requires_gpu
+    @parametrize("device", ["cpu", GPU_TYPE])
+    def test_switch_with_non_tensor_index(self, device):
+        model = SwitchModels.WithNonTensorIndex()
+        compiled = torch.compile(model, backend="inductor", fullgraph=True)
+        a = torch.randn(10, 20, device=device)
+        b = torch.randn(4, 20, device=device)
+        torch.testing.assert_close(model(a, b), compiled(a, b))
+        a2 = torch.randn(4, 20, device=device)
+        b2 = torch.randn(10, 20, device=device)
+        torch.testing.assert_close(model(a2, b2), compiled(a2, b2))
+
+
 class WhileLoopModels:
     class Simple(torch.nn.Module):
         def forward(self, ci, a, b):
@@ -2348,6 +2522,7 @@ class MapTests(TestCase):
 
 
 instantiate_parametrized_tests(CondTests)
+instantiate_parametrized_tests(SwitchTests)
 instantiate_parametrized_tests(WhileLoopTests)
 instantiate_parametrized_tests(AssociativeScanTests)
 instantiate_parametrized_tests(ScanTests)

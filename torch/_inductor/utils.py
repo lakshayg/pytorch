@@ -3892,7 +3892,7 @@ def is_cudagraph_unsafe_op(node: Operation) -> bool:
     from . import ir
 
     # Control flow nodes are cudagraph-unsafe
-    if isinstance(node, (ir.Conditional, ir.WhileLoop)):
+    if isinstance(node, (ir.Conditional, ir.WhileLoop, ir.Switch)):
         return True
 
     if not isinstance(node, (ir.FallbackKernel, ir.ExternKernel)):

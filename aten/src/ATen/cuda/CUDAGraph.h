@@ -10,6 +10,7 @@
 
 #include <limits>
 #include <stack>
+#include <vector>
 
 #if defined(USE_ROCM) || !(defined(CUDA_VERSION) && CUDA_VERSION >= 12040)
 // this type is not defined until CUDA 12.4, but we use it as a
@@ -76,6 +77,10 @@ struct TORCH_CUDA_CPP_API CUDAGraph {
   static CUDAGraph* get_currently_capturing_graph();
   void begin_capture_to_if_node(const Tensor& scalar_cuda_pred_tensor);
   void end_capture_to_conditional_node();
+#if !defined(USE_ROCM) && (defined(CUDA_VERSION) && CUDA_VERSION >= 12080)
+  void begin_capture_to_switch_node(const Tensor& scalar_cuda_index_tensor, size_t num_branches);
+  void begin_capture_to_switch_branch(size_t branch_index);
+#endif
   static void set_conditional_handle(
       cudaGraphConditionalHandle handle,
       const Tensor& scalar_cuda_pred_tensor);
@@ -141,6 +146,10 @@ struct TORCH_CUDA_CPP_API CUDAGraph {
       conditional_node_streams_;
   std::stack<CaptureId_t> conditional_graph_capture_streams_ids_;
   std::vector<cudaGraph_t> descendent_graphs_;
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
+  std::stack<std::vector<cudaGraph_t>> switch_child_graphs_;
+  std::stack<size_t> switch_branch_count_;
+#endif
 #endif // !defined(USE_ROCM) && defined(CUDA_VERSION) && CUDA_VERSION >= 12040
 };
 

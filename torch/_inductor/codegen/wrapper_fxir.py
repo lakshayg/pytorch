@@ -53,6 +53,7 @@ from .wrapper import (
     CommentLine,
     ConditionalLine,
     DynamicScalarLine,
+    SwitchLine,
     EnterDeviceContextManagerLine,
     EnterSubgraphLine,
     ExitDeviceContextManagerLine,
@@ -163,6 +164,12 @@ class WrapperFxCodegen(PythonWrapperCodegen):
         """
         self.writeline(ConditionalLine(self, conditional))
         for subgraph in (conditional.true_subgraph, conditional.false_subgraph):
+            self.codegen_subgraph_common(subgraph)
+
+    def codegen_switch(self, switch_node: ir.Switch) -> None:
+        self.writeline(SwitchLine(self, switch_node))
+        assert switch_node.branch_subgraphs is not None
+        for subgraph in switch_node.branch_subgraphs:
             self.codegen_subgraph_common(subgraph)
 
     def define_subgraph_launcher_fn(
@@ -713,6 +720,31 @@ class FxConverter:
         fx_node = self.gm.graph.call_function(
             torch.ops.higher_order.cond,
             args=(predicate, true_subgm, false_subgm, operands),
+        )
+        self._record_allocation(ir_node, fx_node)
+
+    def _generate_switch(self, line: WrapperLine) -> None:
+        assert isinstance(line, SwitchLine)
+        ir_node = line.node
+
+        def get_subgm_attr(subgraph: Optional[ir.Subgraph]) -> torch.fx.Node:
+            assert subgraph is not None
+            return self._get_subgm_attr(subgraph)
+
+        branch_subgms = [
+            get_subgm_attr(sg) for sg in (ir_node.branch_subgraphs or ())
+        ]
+
+        def generate_buffer(node: Optional[ir.IRNode]) -> Optional[torch.fx.Node]:
+            assert node is not None
+            return self._generate_buffer(node)
+
+        index_node = generate_buffer(ir_node.index)
+        assert ir_node.operands is not None
+        operands = tuple(generate_buffer(arg) for arg in ir_node.operands)
+        fx_node = self.gm.graph.call_function(
+            torch.ops.higher_order.switch,
+            args=(index_node, tuple(branch_subgms), operands),
         )
         self._record_allocation(ir_node, fx_node)
 

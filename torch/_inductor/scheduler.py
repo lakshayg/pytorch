@@ -5986,6 +5986,9 @@ class Scheduler:
         if isinstance(node.node, ir.Conditional):
             return "Conditional ops"
 
+        if isinstance(node.node, ir.Switch):
+            return "Switch ops"
+
         if getattr(node.node, "unbacked_bindings", None):
             return "unbacked binding ops"
 
