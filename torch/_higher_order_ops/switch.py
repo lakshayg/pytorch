@@ -294,7 +294,6 @@ def inner(mode, index, branches, operands):
 
 @switch_op.py_impl(FakeTensorMode)
 def switch_fake_tensor_mode(mode, index, branches, operands):
-    from torch._higher_order_ops.cond import _merge_output
     # Ignore here, because if you've gotten here but you're not manually
     # tracing the inner graphs, that means that you intend to reuse the graph
     # directly.  Which means the old unbacked symbol bindings are appropriate.
@@ -304,28 +303,91 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
         ignore_fresh_unbacked = mode.shape_env.ignore_fresh_unbacked_symbols()
 
     with mode, ignore_fresh_unbacked:
-        flat_outs_list = []
-        ref_spec = None
-        for branch in branches:
-            out = branch(*operands)
-            flat, spec = pytree.tree_flatten(out)
-            if ref_spec is not None and spec != ref_spec:
+        flat_branch_outs, branch_out_spec = zip(*[pytree.tree_flatten(branch(*operands)) for branch in branches])
+        for i, spec in enumerate(branch_out_spec):
+            if branch_out_spec[0] != spec:
                 raise RuntimeError(
                     "Unmatched output spec from torch.switch branches: "
-                    f"branch 0 tree_spec {ref_spec} vs tree_spec {spec}."
+                    f"branch0 tree_spec {branch_out_spec[0]} vs branch{i} tree_spec {spec}"
                 )
-            ref_spec = spec
-            flat_outs_list.append(flat)
 
-    num_outputs = len(flat_outs_list[0])
-    merged = []
-    for j in range(num_outputs):
-        m = flat_outs_list[0][j]
-        for i in range(1, len(branches)):
-            m = _merge_output(m, flat_outs_list[i][j], mode)
-        merged.append(m)
-    return pytree.tree_unflatten(merged, ref_spec)
+    merged_outs = []
+    for branches_out in zip(*flat_branch_outs):
+        merged_outs.append(_merge_output(branches_out, mode))
+    return pytree.tree_unflatten(merged_outs, branch_out_spec[0])
 
+
+def check_tensor_meta_match(
+    t1: torch.Tensor, t2: torch.Tensor, attr_names: tuple[str, ...], msg_prefix: str
+) -> None:
+    # TODO
+    pass
+
+
+def _merge_output(
+    xs: tuple[Optional[Union[torch.Tensor, int]]],
+    mode: FakeTensorMode,
+):
+    if any(x is None for x in xs):
+        if not all(x is None for x in xs):
+            raise AssertionError(f"Expected all xs to be None, got xs={xs}")
+    return None
+
+    def min_max(ss):
+        # TODO
+        pass
+
+    if all(type(x) is int for x in xs):
+        if all(x == xs[0] for x in xs):
+            return xs[0]
+        if mode.shape_env is None:
+            raise AssertionError("mode.shape_env is None")
+        merged_out = mode.shape_env.create_unbacked_symint()
+        mode.shape_env.constrain_symbol_range(merged_out.node.expr, *min_max(xs))
+        return merged_out
+
+    if not all(type(x) is FakeTensor for x in xs):
+        raise AssertionError(
+            f"expected all xs to be FakeTensor, got {xs}"
+        )
+
+    # Note: we don't check size, stride because
+    # they'll be merged with unbacked symints if they differ.
+    _meta_to_check = {
+        "dtype",
+        "device",
+        "layout",
+        "dim",
+        "is_quantized",
+        "is_conj",
+        "is_sparse",
+        "storage_offset",
+    }
+    check_tensor_meta_match(
+        xs,
+        tuple(_meta_to_check),
+        msg_prefix="When merging all branches' output in torch.switch, ",
+    )
+    # NYI
+    if any(x.is_quantized for x in xs):
+        raise AssertionError("quantized tensors not yet implemented")
+    if any(x.is_sparse for x in xs):
+        raise AssertionError("sparse tensors not yet implemented")
+    if any(x.is_conj() for x in xs):
+        raise AssertionError("conjugate tensors not yet implemented")
+
+    """
+    Step 1: create unbacked symints for sizes that are different
+    along the same axis. For example:
+        a.size is [s0, 4, s0, 5, 4, 5]
+        b.size is [s1, 4, s2, 8, 4, 7]
+        merged_size will be [u0, 4, u1, u2, 4, u3], where
+        u0 has range [min(s0, s1), max(s0, s1)]
+        u1 has range [min(s0, s2), max(s0, s2)]
+        u2 has range [5, 8]
+        u3 has range [5, 7]
+    """
+    # TODO
 
 @switch_op.py_functionalize_impl
 def switch_func(ctx, index, branches, inputs):
@@ -340,10 +402,10 @@ def switch_func(ctx, index, branches, inputs):
         pre_dispatch = hasattr(ctx, "mode") and ctx.mode.pre_dispatch
         for i, branch in enumerate(branches):
             _check_alias_and_mutation(
-                branch, unwrapped_inputs, f"switch_branch_{i}", pre_dispatch
+                branch, unwrapped_inputs, f"switch_branch{i}", pre_dispatch
             )
         switch_return = switch_op(
-            unwrapped_index, tuple(functional_branches), unwrapped_inputs
+            unwrapped_index, functional_branches, unwrapped_inputs
         )
         return ctx.wrap_tensors(switch_return)
 
@@ -374,24 +436,16 @@ def switch_batch_rule(interpreter, index, branches, inputs):
         in_dims = (0,) + in_dims
 
         def fn(idx, *args):
-            branch_outs = [branch(*args) for branch in branches]
-            batch_size = idx.shape[0]
-            arange = torch.arange(batch_size, device=idx.device)
-            if isinstance(branch_outs[0], tuple):
-                return tuple(
-                    torch.stack([bo[j] for bo in branch_outs], 0)[idx, arange]
-                    for j in range(len(branch_outs[0]))
-                )
-            stacked = torch.stack(branch_outs, 0)
-            return stacked[idx, arange]
+            branch_outs = [branch(*args)[0] for branch in branches]
+            return torch.index_select(torch.stack(branch_outs), 0, idx)
 
         with interpreter.lower():
             result = torch.vmap(fn, in_dims=in_dims)(*tensors)
     else:
-        idx = index_.item() if isinstance(index_, torch.Tensor) else int(index_)
-        vmapped_branch = torch.vmap(branches[idx], in_dims=in_dims)
+        branches = [torch.vmap(branch, in_dims=in_dims) for branch in branches]
+
         with interpreter.lower():
-            result = vmapped_branch(*tensors)
+            result = switch_op(index, branches, tensors)
 
     if not isinstance(result, tuple):
         result = (result,)
