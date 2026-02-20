@@ -608,6 +608,83 @@ def forward(self, pred_1, x_1):
     return (getitem_1,)""",  # noqa: B950
         )
 
+    def test_switch_basic(self):
+        x = torch.tensor([0, 1, 2])
+        branches = (
+            lambda x: torch.zeros_like(x),
+            lambda x: torch.ones_like(x),
+            lambda x: 2 * torch.ones_like(x),
+        )
+
+        # integer indices
+        result = torch.switch(-1, branches, (x,))
+        self.assertEqual(result, torch.zeros_like(x))
+
+        result = torch.switch(0, branches, (x,))
+        self.assertEqual(result, torch.zeros_like(x))
+
+        result = torch.switch(1, branches, (x,))
+        self.assertEqual(result, torch.ones_like(x))
+
+        result = torch.switch(2, branches, (x,))
+        self.assertEqual(result, 2 * torch.ones_like(x))
+
+        result = torch.switch(3, branches, (x,))
+        self.assertEqual(result, 2 * torch.ones_like(x))
+
+
+        # tensor indices
+        result = torch.switch(torch.tensor([-1]), branches, (x,))
+        self.assertEqual(result, torch.zeros_like(x))
+
+        result = torch.switch(torch.tensor([0]), branches, (x,))
+        self.assertEqual(result, torch.zeros_like(x))
+
+        result = torch.switch(torch.tensor([1]), branches, (x,))
+        self.assertEqual(result, torch.ones_like(x))
+
+        result = torch.switch(torch.tensor([2]), branches, (x,))
+        self.assertEqual(result, 2 * torch.ones_like(x))
+
+        result = torch.switch(torch.tensor([3]), branches, (x,))
+        self.assertEqual(result, 2 * torch.ones_like(x))
+
+    def test_switch_invalid_index(self):
+        x = torch.ones(3)
+        branches = (torch.sin, torch.cos)
+
+        with self.assertRaisesRegex(RuntimeError, "Expected index to be an int or tensor"):
+            torch.switch([0, 1], branches, (x,))
+
+        with self.assertRaisesRegex(RuntimeError, "Expected index to be int or single-element tensor"):
+            torch.switch(torch.tensor([0, 1]), branches, (x,))
+
+    def test_switch_zero_branch(self):
+        x = torch.ones(3)
+
+        # NOTE: This does not hit the _validate_input function
+        with self.assertRaisesRegex(IndexError, "list index out of range"):
+            torch.switch(0, [], (x,))
+
+        with self.assertRaisesRegex(RuntimeError, "Expected branches to be a non-empty tuple or list of callables"):
+            torch.switch(torch.tensor([0]), [], (x,))
+
+    def test_switch_different_output_shapes(self):
+        x = (torch.pi / 2) * torch.ones(2)
+
+        branches = (torch.sin, torch.sum)
+
+        result = torch.switch(0, branches, (x,))
+        self.assertEqual(result, torch.ones_like(x))
+
+        result = torch.switch(1, branches, (x,))
+        self.assertEqual(result.item(), torch.pi)
+
+        # NOTE: This doesn't work
+        # result = torch.cond(torch.tensor([False]), *branches, (x,))
+        # result = torch.switch(torch.tensor([0]), branches, (x,))
+        # self.assertEqual(result, torch.ones_like(x))
+
     def test_switch_no_trace(self):
         def branch0(x):
             return x.sin()
