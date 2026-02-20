@@ -165,6 +165,7 @@ def switch(
     from torch._higher_order_ops.utils import setup_compilation_env
 
     with setup_compilation_env() as backend:
+        # NOTE: torch.compile probably doesn't work for switch
         return torch.compile(_switch_op_wrapper, backend=backend, fullgraph=True)(
             index, branches, operands
         )
@@ -338,7 +339,8 @@ def check_tensor_meta_match(
 
 def _merge_output(
     xs: tuple[Optional[Union[torch.Tensor, int]], ...],
-    mode: FakeTensorMode,
+    mode: FakeTensorMode
+):
     from torch._higher_order_ops.cond import _merge_output as cond_merge_output
     return functools.reduce(lambda a, b: cond_merge_output(a, b, mode), xs)
 
