@@ -121,7 +121,8 @@ def switch(
                 stacklevel=2,
             )
         # This is the eager case. We can just run the relevant branch
-        return branches[index](*operands)
+        clamped_index = min(max(0, index), len(branches)-1)
+        return branches[clamped_index](*operands)
 
     def _validate_input(index, branches, operands):
         if not isinstance(index, (int, torch.Tensor, torch.SymInt)):
@@ -132,9 +133,9 @@ def switch(
                 f"Expected index to be int or single-element tensor, but got {index}."
             )
 
-        index_item = index.item() if isinstance(index, torch.Tensor) else index
-        if index_item < 0 or index_item >= len(branches):
-            raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {index_item}.")
+        # index_item = index.item() if isinstance(index, torch.Tensor) else index
+        # if index_item < 0 or index_item >= len(branches):
+        #     raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {index_item}.")
 
         if not isinstance(branches, (tuple, list)) or len(branches) == 0:
             raise RuntimeError("Expected branches to be a non-empty tuple or list of callables.")
@@ -221,9 +222,10 @@ def switch_op_dense(index, branches, operands):
     if mode is not None:
         raise AssertionError("Mode should never be enabled for CPU/CUDA key")
     idx = index.item() if isinstance(index, torch.Tensor) else int(index)
-    if idx < 0 or idx >= len(branches):
-        raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {idx}")
-    return branches[idx](*operands)
+    # if idx < 0 or idx >= len(branches):
+    #     raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {idx}")
+    clamped_idx = min(max(0, idx), len(branches) - 1)
+    return branches[clamped_idx](*operands)
 
 
 class SwitchAutogradOp(torch.autograd.Function):
