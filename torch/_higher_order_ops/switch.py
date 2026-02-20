@@ -5,7 +5,7 @@ import functools
 import logging
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import torch
 import torch.utils._pytree as pytree
@@ -31,7 +31,7 @@ from torch._higher_order_ops.utils import (
     validate_subgraph_args_types,
 )
 from torch._ops import HigherOrderOperator
-from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 from torch.fx.experimental.proxy_tensor import ProxyTorchDispatchMode, track_tensor_tree
 from torch.utils._python_dispatch import _get_current_dispatch_mode
 
@@ -132,7 +132,7 @@ def switch(
                 f"Expected index to be int or single-element tensor, but got {index}."
             )
 
-        index_item = index.item() is isinstance(index, torch.Tensor) else index
+        index_item = index.item() if isinstance(index, torch.Tensor) else index
         if index_item < 0 or index_item >= len(branches):
             raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {index_item}.")
 
@@ -188,7 +188,6 @@ def trace_switch(proxy_mode, func_overload, index, branches, operands):
     flat_branch_outs = [pytree.arg_tree_leaves(*outs) for outs in branch_outs]
     for i, outs in enumerate(flat_branch_outs):
         if len(flat_branch_outs[0]) != len(outs):
-            # TODO define SwitchOpArgsMismatchError
             raise torch._dynamo.exc.SwitchOpArgsMismatchError(
                 f"Expected to return same number of outputs from all branches but got:"
                 f"\n  branch0 returns {len(flat_branch_outs[0])} item(s)"
@@ -318,76 +317,28 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
 
 
 def check_tensor_meta_match(
-    t1: torch.Tensor, t2: torch.Tensor, attr_names: tuple[str, ...], msg_prefix: str
+    tensors: tuple[torch.Tensor, ...], attr_names: tuple[str, ...], msg_prefix: str
 ) -> None:
-    # TODO
-    pass
+    def _get_attr_maybe_call(t: torch.Tensor, attr_name: str) -> Any:
+        attr = getattr(t, attr_name)
+        if callable(attr):
+            return attr()
+        return attr
+
+    for attr_name in attr_names:
+        attrs = [_get_attr_maybe_call(t, attr_name) for t in tensors]
+        for a, b in itertools.pairwise(attrs):
+            torch._check(
+                a == b,
+                lambda: f"{msg_prefix} expected same {attr_name} but got {a} and {b}.",
+            )
 
 
 def _merge_output(
-    xs: tuple[Optional[Union[torch.Tensor, int]]],
+    xs: tuple[Optional[Union[torch.Tensor, int]], ...],
     mode: FakeTensorMode,
-):
-    if any(x is None for x in xs):
-        if not all(x is None for x in xs):
-            raise AssertionError(f"Expected all xs to be None, got xs={xs}")
-    return None
-
-    def min_max(ss):
-        # TODO
-        pass
-
-    if all(type(x) is int for x in xs):
-        if all(x == xs[0] for x in xs):
-            return xs[0]
-        if mode.shape_env is None:
-            raise AssertionError("mode.shape_env is None")
-        merged_out = mode.shape_env.create_unbacked_symint()
-        mode.shape_env.constrain_symbol_range(merged_out.node.expr, *min_max(xs))
-        return merged_out
-
-    if not all(type(x) is FakeTensor for x in xs):
-        raise AssertionError(
-            f"expected all xs to be FakeTensor, got {xs}"
-        )
-
-    # Note: we don't check size, stride because
-    # they'll be merged with unbacked symints if they differ.
-    _meta_to_check = {
-        "dtype",
-        "device",
-        "layout",
-        "dim",
-        "is_quantized",
-        "is_conj",
-        "is_sparse",
-        "storage_offset",
-    }
-    check_tensor_meta_match(
-        xs,
-        tuple(_meta_to_check),
-        msg_prefix="When merging all branches' output in torch.switch, ",
-    )
-    # NYI
-    if any(x.is_quantized for x in xs):
-        raise AssertionError("quantized tensors not yet implemented")
-    if any(x.is_sparse for x in xs):
-        raise AssertionError("sparse tensors not yet implemented")
-    if any(x.is_conj() for x in xs):
-        raise AssertionError("conjugate tensors not yet implemented")
-
-    """
-    Step 1: create unbacked symints for sizes that are different
-    along the same axis. For example:
-        a.size is [s0, 4, s0, 5, 4, 5]
-        b.size is [s1, 4, s2, 8, 4, 7]
-        merged_size will be [u0, 4, u1, u2, 4, u3], where
-        u0 has range [min(s0, s1), max(s0, s1)]
-        u1 has range [min(s0, s2), max(s0, s2)]
-        u2 has range [5, 8]
-        u3 has range [5, 7]
-    """
-    # TODO
+    from torch._higher_order_ops.cond import _merge_output as cond_merge_output
+    return functools.reduce(lambda a, b: cond_merge_output(a, b, mode), xs)
 
 @switch_op.py_functionalize_impl
 def switch_func(ctx, index, branches, inputs):
