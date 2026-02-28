@@ -440,6 +440,17 @@ function(torch_compile_options libname)
       endif()
       target_compile_options(${libname} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler ${option}>)
     endforeach()
+
+    # Set -frandom-seed=<filename> for reproducible builds
+    get_target_property(sources ${libname} SOURCES)
+    foreach(src IN LISTS sources)
+      cmake_path(RELATIVE_PATH src BASE_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE rpath)
+      # observation: sometimes rpath is empty, in these cases src is just the file basename
+      if (NOT rpath)
+        set(rpath ${src})
+      endif()
+      set_property(SOURCE ${src} APPEND PROPERTY COMPILE_OPTIONS "-frandom-seed=${rpath}")
+    endforeach()
   endif()
 
   if(NOT WIN32 AND NOT USE_ASAN)
