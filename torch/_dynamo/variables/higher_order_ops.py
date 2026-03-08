@@ -27,7 +27,7 @@ import types
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, TYPE_CHECKING, Union
+from typing import Any, cast, Literal, Optional, TYPE_CHECKING, Union
 
 import torch._C
 import torch.fx
@@ -2455,13 +2455,15 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
             idx = index.as_python_constant()
             branch_fns = branches.unpack_var_sequence(tx)
             clamped = min(max(0, idx), len(branch_fns) - 1)
-            return branch_fns[clamped].call_function(tx, operands.unpack_var_sequence(tx), {})
+            return branch_fns[clamped].call_function(
+                tx, operands.unpack_var_sequence(tx), {}
+            )
 
         # index
         if type(index.realize()) not in (
             ConstantVariable,
             TensorVariable,
-            SymNodeVariable
+            SymNodeVariable,
         ):
             unimplemented(
                 gb_type="torch.switch: improper index",
@@ -2572,11 +2574,14 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
                     )
             return ret_val, ret_spec, ret_graph, ret_lifted_freevars
 
-        branch_states, branch_nn_modules = [], []
+        branch_states: list[Any] = []
+        branch_nn_modules: list[Any] = []
         for f in branch_fns:
             branch_states.append(speculate_branch(f))
             branch_nn_modules.append(dict(tx.output.nn_modules))
-        branch_rets, branch_specs, branch_graphs, branch_lifted_freevars = zip(*branch_states)
+        branch_rets, branch_specs, branch_graphs, branch_lifted_freevars = zip(
+            *branch_states
+        )
 
         for i, (spec_a, spec_b) in enumerate(itertools.pairwise(branch_specs)):
             same_spec = _make_inlined(tx, pytree.TreeSpec.__eq__)(
@@ -2586,7 +2591,7 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
             if same_spec is not NotImplemented and not same_spec:
                 unimplemented(
                     gb_type="torch.switch: differing branch outputs",
-                    context=f"branch{i}: {spec_a.treespec}, branch{i+1}: {spec_b.treespec}, same_spec: {same_spec}",
+                    context=f"branch{i}: {spec_a.treespec}, branch{i + 1}: {spec_b.treespec}, same_spec: {same_spec}",
                     explanation="Expected branches to return the same pytree structure.",
                     hints=[*graph_break_hints.USER_ERROR],
                 )
@@ -2596,14 +2601,15 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
         # (e.g. different nn module attrs), so we union them and add missing
         # placeholders to any branch graph that lacks them.
         all_lifted = _merge_switch_graph_inputs(
-            branch_graphs, branch_lifted_freevars
+            list(branch_graphs), list(branch_lifted_freevars)
         )
 
         branch_names = [
             tx.output.install_subgraph(
                 f"switch_branch{i}",
                 GraphModule(branch_nn_modules[i], graph),
-            ) for i, graph in enumerate(branch_graphs)
+            )
+            for i, graph in enumerate(branch_graphs)
         ]
 
         branch_nodes = [make_attr(tx, name) for name in branch_names]
@@ -2651,7 +2657,7 @@ def _merge_switch_graph_inputs(
             if id(outer) in outer_to_canonical:
                 continue
             if outer.node.op == "get_attr":
-                target = outer.node.target
+                target = cast(str, outer.node.target)
                 if target not in get_attr_canonical:
                     get_attr_canonical[target] = outer
                 outer_to_canonical[id(outer)] = get_attr_canonical[target]
@@ -2673,9 +2679,7 @@ def _merge_switch_graph_inputs(
             canonical = outer_to_canonical[id(outer)]
             canonical_to_inner[id(canonical)] = inner
 
-        first_not_ph = next(
-            (n for n in graph.nodes if n.op != "placeholder"), None
-        )
+        first_not_ph = next((n for n in graph.nodes if n.op != "placeholder"), None)
         if first_not_ph is None:
             continue
 

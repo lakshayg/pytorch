@@ -740,7 +740,7 @@ def forward(self, pred_1, x_1):
 
     def test_switch_multiple_args(self):
         x = torch.ones(3)
-        y = torch.tensor([1., 2., 3.])
+        y = torch.tensor([1.0, 2.0, 3.0])
         branches = (
             lambda x, y: x + y,
             lambda x, y: x * y,
@@ -760,10 +760,14 @@ def forward(self, pred_1, x_1):
         x = torch.ones(3)
         branches = (torch.sin, torch.cos)
 
-        with self.assertRaisesRegex(RuntimeError, "Expected index to be an int or tensor"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Expected index to be an int or tensor"
+        ):
             torch.switch([0, 1], branches, (x,))
 
-        with self.assertRaisesRegex(RuntimeError, "Expected index to be int or single-element tensor"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Expected index to be int or single-element tensor"
+        ):
             torch.switch(torch.tensor([0, 1]), branches, (x,))
 
     def test_switch_zero_branch(self):
@@ -773,7 +777,10 @@ def forward(self, pred_1, x_1):
         with self.assertRaisesRegex(IndexError, "list index out of range"):
             torch.switch(0, [], (x,))
 
-        with self.assertRaisesRegex(RuntimeError, "Expected branches to be a non-empty tuple or list of callables"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Expected branches to be a non-empty tuple or list of callables",
+        ):
             torch.switch(torch.tensor([0]), [], (x,))
 
     def test_switch_different_output_shapes(self):
@@ -818,7 +825,6 @@ def forward(self, pred_1, x_1):
 
         x = torch.ones(4)
         for i in range(3):
-            itensor = torch.tensor([i])
             func(i, x)
 
     def test_switch_aoti(self):
@@ -867,9 +873,13 @@ def forward(self, pred_1, x_1):
             return torch.switch(idx, branches, (x,))
 
         indices = torch.tensor([[-1], [0], [1], [2]])
-        a = torch.tensor([[1., 2., 3.], [1., 2., 3.], [4., 5., 6.], [7., 8., 9.]])
+        a = torch.tensor(
+            [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+        )
         result = torch.vmap(fn)(indices, a)
-        expected = torch.tensor([[2., 3., 4.], [2., 3., 4.], [8., 10., 12.], [49., 64., 81.]])
+        expected = torch.tensor(
+            [[2.0, 3.0, 4.0], [2.0, 3.0, 4.0], [8.0, 10.0, 12.0], [49.0, 64.0, 81.0]]
+        )
         self.assertEqual(result, expected)
 
     def test_switch_no_trace(self):
@@ -884,8 +894,12 @@ def forward(self, pred_1, x_1):
         self.assertEqual(torch.switch(0, (branch0, branch1), (x,)), x.cos())
         self.assertEqual(torch.switch(1, (branch0, branch1), (x,)), x.sin())
         # tensor index
-        self.assertEqual(torch.switch(torch.tensor([0]), (branch0, branch1), (x,)), x.cos())
-        self.assertEqual(torch.switch(torch.tensor([1]), (branch0, branch1), (x,)), x.sin())
+        self.assertEqual(
+            torch.switch(torch.tensor([0]), (branch0, branch1), (x,)), x.cos()
+        )
+        self.assertEqual(
+            torch.switch(torch.tensor([1]), (branch0, branch1), (x,)), x.sin()
+        )
 
     def test_switch_cond_equivalence(self):
         # switch(int(pred), [false_fn, true_fn], ops) must equal cond(pred, true_fn, false_fn, ops).
@@ -906,7 +920,7 @@ def forward(self, pred_1, x_1):
     @skipIfTorchDynamo("Skip due to graph break when run with dynamo")
     def test_switch_autograd_complex(self):
         def branch0(x):
-            return torch.abs((x ** 2).sin())
+            return torch.abs((x**2).sin())
 
         def branch1(x):
             return (x + 42).cos()
@@ -1051,9 +1065,9 @@ def forward(self, pred_1, x_1):
             )
 
         preds = torch.tensor([[True], [False], [True]])
-        a = torch.tensor([[1., 2., 3.], [4., 5., 6.], [7., 8., 9.]])
+        a = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
         result = torch.vmap(fn)(preds, a)
-        expected = torch.tensor([[2., 3., 4.], [8., 10., 12.], [8., 9., 10.]])
+        expected = torch.tensor([[2.0, 3.0, 4.0], [8.0, 10.0, 12.0], [8.0, 9.0, 10.0]])
         self.assertEqual(result, expected)
 
     def test_cond_autograd_complex(self):

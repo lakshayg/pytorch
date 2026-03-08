@@ -9299,7 +9299,9 @@ class SwitchCond(ExternKernel):
     ) -> list[MultiOutput]:
         # TODO: .lowering.switch
         """Create a Sequence of IRNodes from a conditional statement (see .lowering.switch)"""
+        # pyrefly: ignore [bad-assignment]
         index = cls.realize_input(index)
+        # pyrefly: ignore [bad-assignment]
         operands = [cls.realize_input(x) for x in operands]
         fx_operands: Argument = V.graph.current_node.args[-1]
 
@@ -9318,10 +9320,12 @@ class SwitchCond(ExternKernel):
                     ret.append(output)
                 else:
                     ret.append(
+                        # pyrefly: ignore [bad-argument-type]
                         ExternKernel.require_exact_strides(
                             TensorBox(output), fake.stride(), allow_padding=False
                         )
                     )
+            # pyrefly: ignore [bad-return]
             return ret
 
         for subgraph in branch_fns:
@@ -9342,7 +9346,10 @@ class SwitchCond(ExternKernel):
                     )
 
         assert all(fn.graph is not None for fn in branch_fns)
-        branch_outputs = [fn.graph.graph_outputs for fn in branch_fns]
+        branch_outputs = [
+            fn.graph.graph_outputs  # pyrefly: ignore [missing-attribute]
+            for fn in branch_fns
+        ]
 
         for i, outputs in enumerate(branch_outputs):
             if _has_aliased_buffers(outputs):
@@ -9354,9 +9361,16 @@ class SwitchCond(ExternKernel):
         # make sure true and false outputs are structurally equivalent
         assert all(len(a) == len(b) for (a, b) in itertools.pairwise(branch_outputs))
         for i, outputs in enumerate(zip(*branch_outputs)):
-            assert all(a.get_device() == b.get_device() for a, b in itertools.pairwise(outputs)), (i, *outputs)
-            assert all(a.get_dtype() == b.get_dtype() for a, b in itertools.pairwise(outputs)), (i, *outputs)
-            assert all(a.get_layout().offset == b.get_layout().offset for a, b in itertools.pairwise(outputs)), (i, *outputs)
+            assert all(
+                a.get_device() == b.get_device() for a, b in itertools.pairwise(outputs)
+            ), (i, *outputs)
+            assert all(
+                a.get_dtype() == b.get_dtype() for a, b in itertools.pairwise(outputs)
+            ), (i, *outputs)
+            assert all(
+                a.get_layout().offset == b.get_layout().offset
+                for a, b in itertools.pairwise(outputs)
+            ), (i, *outputs)
 
         # Determine device from operands and predicate
         # The predicate can be on a different device (e.g., CPU for control flow)

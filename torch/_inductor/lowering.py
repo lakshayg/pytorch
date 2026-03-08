@@ -7516,7 +7516,7 @@ def switch(index, branches, operands):
         V.graph.disable_cudagraphs_reason = msg
 
     result = ir.SwitchCond.create(index, branches, operands)
-    return list(map(TensorBox.create, result))
+    return list(map(TensorBox.create, result))  # pyrefly: ignore no-matching-overload
 
 
 @register_lowering(torch.ops.higher_order.while_loop, type_promotion_kind=None)

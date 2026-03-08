@@ -53,7 +53,9 @@ class SwitchOp(HigherOrderOperator):
         from torch._higher_order_ops.schema import HopSchemaGenerator
         from torch._higher_order_ops.utils import materialize_as_graph
 
-        branch_gms: list[torch.fx.GraphModule] = [materialize_as_graph(fn, operands) for fn in branches]
+        branch_gms: list[torch.fx.GraphModule] = [
+            materialize_as_graph(fn, operands) for fn in branches
+        ]
         mutated_inputs = set()
         for gm in branch_gms:
             (
@@ -72,7 +74,7 @@ class SwitchOp(HigherOrderOperator):
         for idx, arg in enumerate(operands):
             schema_gen.add_arg(f"operand{idx}", arg, is_mutated=idx in mutated_inputs)
 
-        for out in branch_outputs: # NOTE: we're using the output from the last branch
+        for out in branch_outputs:  # NOTE: we're using the output from the last branch
             schema_gen.add_output(out)
         schema_gen.add_schema_tree_spec(index, branches, operands)
         return schema_gen.gen_schema()
@@ -146,7 +148,9 @@ def switch(
 
     def _validate_input(index, branches, operands):
         if not isinstance(index, (int, torch.Tensor, torch.SymInt)):
-            raise RuntimeError(f"Expected index to be an int or tensor, but got {index}.")
+            raise RuntimeError(
+                f"Expected index to be an int or tensor, but got {index}."
+            )
 
         if isinstance(index, torch.Tensor) and index.numel() != 1:
             raise RuntimeError(
@@ -154,11 +158,15 @@ def switch(
             )
 
         if not isinstance(branches, (tuple, list)) or len(branches) == 0:
-            raise RuntimeError("Expected branches to be a non-empty tuple or list of callables.")
+            raise RuntimeError(
+                "Expected branches to be a non-empty tuple or list of callables."
+            )
 
         for i, branch in enumerate(branches):
             if not callable(branch):
-                raise RuntimeError(f"Expected all branches to be callable. branch{i} is not callable.")
+                raise RuntimeError(
+                    f"Expected all branches to be callable. branch{i} is not callable."
+                )
 
         if not isinstance(operands, (tuple, list)) or pytree.tree_any(
             lambda t: not isinstance(t, torch.Tensor), operands
@@ -192,7 +200,9 @@ def trace_switch(proxy_mode, func_overload, index, branches, operands):
             f"Switch operands must be a list or tuple of tensors and SymInts {operands}"
         )
     if not isinstance(branches, (list, tuple)) or len(branches) == 0:
-        raise AssertionError("Switch branches must be a non-empty list or tuple of callables")
+        raise AssertionError(
+            "Switch branches must be a non-empty list or tuple of callables"
+        )
 
     branch_graphs = [reenter_make_fx(branch)(*operands) for branch in branches]
 
@@ -237,7 +247,7 @@ def switch_op_dense(index, branches, operands):
     mode = _get_current_dispatch_mode()
     if mode is not None:
         raise AssertionError("Mode should never be enabled for CPU/CUDA key")
-    idx = index.item() if isinstance(index, torch.Tensor) else int(index)
+    idx: int = int(index.item() if isinstance(index, torch.Tensor) else int(index))
     # Clamp out-of-range indices rather than raising for consistency with compiled behavior.
     clamped_idx = min(max(0, idx), len(branches) - 1)
     return branches[clamped_idx](*operands)
@@ -245,11 +255,10 @@ def switch_op_dense(index, branches, operands):
 
 class SwitchAutogradOp(torch.autograd.Function):
     @staticmethod
+    # pyrefly: ignore [bad-override]
     def forward(ctx, index, branches, *operands):
         ctx._index = index
-        ctx._branch_bw_fns = [
-            create_bw_fn(fn, operands) for fn in branches
-        ]
+        ctx._branch_bw_fns = [create_bw_fn(fn, operands) for fn in branches]
         # We snapshot the dispatch keys in forward for materializing the
         # the bw_graph in backward.
         ctx._fw_include_key_set = torch._C._dispatch_tls_local_include_set()
@@ -319,7 +328,9 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
         ignore_fresh_unbacked = mode.shape_env.ignore_fresh_unbacked_symbols()
 
     with mode, ignore_fresh_unbacked:
-        flat_branch_outs, branch_out_spec = zip(*[pytree.tree_flatten(branch(*operands)) for branch in branches])
+        flat_branch_outs, branch_out_spec = zip(
+            *[pytree.tree_flatten(branch(*operands)) for branch in branches]
+        )
         for i, spec in enumerate(branch_out_spec):
             if branch_out_spec[0] != spec:
                 raise RuntimeError(
@@ -334,10 +345,10 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
 
 
 def _merge_output(
-    xs: tuple[Optional[Union[torch.Tensor, int]], ...],
-    mode: FakeTensorMode
+    xs: tuple[Optional[Union[torch.Tensor, int]], ...], mode: FakeTensorMode
 ):
     from torch._higher_order_ops.cond import _merge_output as cond_merge_output
+
     return functools.reduce(lambda a, b: cond_merge_output(a, b, mode), xs)
 
 
@@ -403,9 +414,7 @@ def switch_batch_rule(interpreter, index, branches, inputs):
         in_dims = (0,) + in_dims
 
         def fn(idx, *args):
-            branch_outs = torch.stack(
-                tuple(branch(*args) for branch in branches)
-            )
+            branch_outs = torch.stack(tuple(branch(*args) for branch in branches))
             return branch_outs[torch.clamp(idx, 0, len(branches) - 1).squeeze()]
 
         with interpreter.lower():
