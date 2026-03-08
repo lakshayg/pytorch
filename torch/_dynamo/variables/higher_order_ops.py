@@ -2585,16 +2585,16 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
             # 3.14: NotImplemented cannot be converted to bool
             if same_spec is not NotImplemented and not same_spec:
                 unimplemented(
-                    gb_type="torch.cond: differing branch outputs",
+                    gb_type="torch.switch: differing branch outputs",
                     context=f"branch{i}: {spec_a.treespec}, branch{i+1}: {spec_b.treespec}, same_spec: {same_spec}",
                     explanation="Expected branches to return the same pytree structure.",
                     hints=[*graph_break_hints.USER_ERROR],
                 )
 
-        # Merge lifted freevars across all branches so they share the same
-        # input signature. Pairwise merge: fold each branch into the running
-        # accumulator of (shared, unique_per_branch) proxies.
-        # TODO: review
+        # Merge lifted freevars across all branches so they all share the same
+        # placeholder signature. Branches may capture different free variables
+        # (e.g. different nn module attrs), so we union them and add missing
+        # placeholders to any branch graph that lacks them.
         all_lifted = _merge_switch_graph_inputs(
             branch_graphs, branch_lifted_freevars
         )
@@ -2611,7 +2611,7 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
         p_args = (
             index.as_proxy(),
             branch_nodes,
-            tuple(all_lifted), # TODO: review
+            tuple(all_lifted),
         )
 
         return _call_function_and_unflatten_output(
@@ -2625,7 +2625,6 @@ class SwitchHigherOrderVariable(TorchHigherOrderOperatorVariable):
         )
 
 
-# TODO: review
 def _merge_switch_graph_inputs(
     graphs: list[torch.fx.Graph],
     lifted_freevars_list: list[dict[Proxy, Proxy]],
