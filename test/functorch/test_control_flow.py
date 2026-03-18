@@ -740,7 +740,7 @@ def forward(self, pred_1, x_1):
 
     def test_switch_multiple_args(self):
         x = torch.ones(3)
-        y = torch.tensor([1., 2., 3.])
+        y = torch.tensor([1.0, 2.0, 3.0])
         branches = (
             lambda x, y: x + y,
             lambda x, y: x * y,
@@ -760,10 +760,14 @@ def forward(self, pred_1, x_1):
         x = torch.ones(3)
         branches = (torch.sin, torch.cos)
 
-        with self.assertRaisesRegex(RuntimeError, "Expected index to be an int or tensor"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Expected index to be an int or tensor"
+        ):
             torch.switch([0, 1], branches, (x,))
 
-        with self.assertRaisesRegex(RuntimeError, "Expected index to be int or single-element tensor"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Expected index to be int or single-element tensor"
+        ):
             torch.switch(torch.tensor([0, 1]), branches, (x,))
 
     def test_switch_zero_branch(self):
@@ -773,7 +777,10 @@ def forward(self, pred_1, x_1):
         with self.assertRaisesRegex(IndexError, "list index out of range"):
             torch.switch(0, [], (x,))
 
-        with self.assertRaisesRegex(RuntimeError, "Expected branches to be a non-empty tuple or list of callables"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Expected branches to be a non-empty tuple or list of callables",
+        ):
             torch.switch(torch.tensor([0]), [], (x,))
 
     def test_switch_different_output_shapes(self):
@@ -818,7 +825,6 @@ def forward(self, pred_1, x_1):
 
         x = torch.ones(4)
         for i in range(3):
-            itensor = torch.tensor([i])
             func(i, x)
 
     def test_switch_aoti(self):
@@ -867,10 +873,187 @@ def forward(self, pred_1, x_1):
             return torch.switch(idx, branches, (x,))
 
         indices = torch.tensor([[-1], [0], [1], [2]])
-        a = torch.tensor([[1., 2., 3.], [1., 2., 3.], [4., 5., 6.], [7., 8., 9.]])
+        a = torch.tensor(
+            [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+        )
         result = torch.vmap(fn)(indices, a)
-        expected = torch.tensor([[2., 3., 4.], [2., 3., 4.], [8., 10., 12.], [49., 64., 81.]])
+        expected = torch.tensor(
+            [[2.0, 3.0, 4.0], [2.0, 3.0, 4.0], [8.0, 10.0, 12.0], [49.0, 64.0, 81.0]]
+        )
         self.assertEqual(result, expected)
+
+    def test_switch_no_trace(self):
+        # Smoke-test eager execution with 2 branches (cond is a special case of switch).
+        def branch0(x):
+            return x.cos()
+
+        def branch1(x):
+            return x.sin()
+
+        x = torch.randn(4)
+        self.assertEqual(torch.switch(0, (branch0, branch1), (x,)), x.cos())
+        self.assertEqual(torch.switch(1, (branch0, branch1), (x,)), x.sin())
+        # tensor index
+        self.assertEqual(
+            torch.switch(torch.tensor([0]), (branch0, branch1), (x,)), x.cos()
+        )
+        self.assertEqual(
+            torch.switch(torch.tensor([1]), (branch0, branch1), (x,)), x.sin()
+        )
+
+    def test_switch_cond_equivalence(self):
+        # switch(int(pred), [false_fn, true_fn], ops) must equal cond(pred, true_fn, false_fn, ops).
+        def true_fn(x):
+            return x.sin()
+
+        def false_fn(x):
+            return x.cos()
+
+        x = torch.randn(4)
+        for pred_val in [True, False]:
+            pred = torch.tensor(pred_val)
+            cond_result = cond(pred, true_fn, false_fn, (x,))
+            idx = torch.tensor([1 if pred_val else 0])
+            switch_result = torch.switch(idx, (false_fn, true_fn), (x,))
+            self.assertEqual(cond_result, switch_result)
+
+    @skipIfTorchDynamo("Skip due to graph break when run with dynamo")
+    def test_switch_autograd_complex(self):
+        def branch0(x):
+            return torch.abs((x**2).sin())
+
+        def branch1(x):
+            return (x + 42).cos()
+
+        def branch2(x):
+            return (x * x).relu()
+
+        branches = (branch0, branch1, branch2)
+        for i, fn in enumerate(branches):
+            x = torch.randn(4, requires_grad=True)
+            result = torch.switch(torch.tensor([i]), branches, (x,))
+            self.assertEqual(result, fn(x))
+
+            grad_out = torch.ones_like(result)
+            grads = torch.autograd.grad(result, (x,), grad_out)
+            expected_grads = torch.autograd.grad(fn(x), (x,), grad_out)
+            self.assertEqual(expected_grads, grads)
+
+    @skipIfTorchDynamo("Skip due to graph break when run with dynamo")
+    def test_switch_autograd_mixed_require_grad(self):
+        def branch0(x, y, z):
+            return x * y * z
+
+        def branch1(x, y, z):
+            return x + y + z
+
+        x = torch.randn(4, requires_grad=True)
+        y = torch.randn(4, requires_grad=False)
+
+        for i, fn in enumerate((branch0, branch1)):
+            result = torch.switch(torch.tensor([i]), (branch0, branch1), (x, y, x))
+            self.assertEqual(result, fn(x, y, x))
+
+            grad_out = torch.ones_like(result)
+            grads = torch.autograd.grad(result, (x,), grad_out)
+            expected_grads = torch.autograd.grad(fn(x, y, x), (x,), grad_out)
+            self.assertEqual(expected_grads, grads)
+
+    def test_switch_compile_backward(self):
+        def branch0(x):
+            return x.cos()
+
+        def branch1(x):
+            return x.sin()
+
+        def branch2(x):
+            return x.abs()
+
+        def f(idx, x):
+            return torch.switch(idx, (branch0, branch1, branch2), (x,))
+
+        x = torch.ones(4, requires_grad=True)
+        for i in range(3):
+            idx = torch.tensor([i])
+            f(idx, x).sum().backward()
+
+        # ensure compiled path matches eager
+        compiled_f = torch.compile(f)
+        for i in range(3):
+            idx = torch.tensor([i])
+            self.assertEqual(compiled_f(idx, x), f(idx, x))
+
+    def test_switch_functionalized(self):
+        def branch0(x):
+            y = x.sin()
+            y.add_(4)
+            return y.sum()
+
+        def branch1(x):
+            return x.cos().sum()
+
+        def branch2(x):
+            return x.abs().sum()
+
+        def f(idx, x):
+            return torch.switch(idx, (branch0, branch1, branch2), (x,))
+
+        x = torch.ones(4, 5)
+        functional_f = torch.func.functionalize(f)
+        for i in range(3):
+            idx = torch.tensor([i])
+            self.assertEqual(functional_f(idx, x), f(idx, x))
+
+    def test_switch_functionalized_input_mutation(self):
+        def branch_mutating(x):
+            view_x = x.view(x.shape)
+            view_x.add_(1)
+            return view_x.sin().sum()
+
+        def branch_clean(x):
+            return x.cos().sum()
+
+        def f(idx, x):
+            return torch.switch(idx, (branch_mutating, branch_clean), (x,))
+
+        x = torch.ones(4, 5)
+        # Tensor index → tracing mode → mutation check fires
+        with self.assertRaisesRegex(
+            torch._dynamo.exc.TorchRuntimeError,
+            "switch_branch0",
+        ):
+            make_fx(torch.func.functionalize(f), tracing_mode="symbolic")(
+                torch.tensor([0]), x
+            )
+
+    def test_switch_with_tensor_closure(self):
+        a = torch.ones(2, 3)
+        b = torch.ones(2, 3) + 1
+        c = torch.ones(2, 3) * 2
+
+        def branch0(x):
+            return x + a
+
+        def branch1(x):
+            return x + b
+
+        def branch2(x):
+            return x + c
+
+        def foo(idx, x):
+            return torch.switch(idx, (branch0, branch1, branch2), (x,))
+
+        inp = torch.randn(2, 3)
+        for i, closure_val in enumerate((a, b, c)):
+            idx = torch.tensor([i])
+            self.assertEqual(foo(idx, inp), inp + closure_val)
+
+        # Closed-over tensors must be lifted as extra inputs in the traced graph.
+        gm = make_fx(foo)(torch.tensor([0]), inp)
+        self.assertEqual(gm(torch.tensor([0]), inp), inp + a)
+        # After mutating the closure, the traced graph should reflect the new value.
+        a.add_(-1)
+        self.assertEqual(gm(torch.tensor([0]), inp), inp + a)
 
     def test_cond_vmap_batched_pred(self):
         def fn(pred, x):
@@ -882,9 +1065,9 @@ def forward(self, pred_1, x_1):
             )
 
         preds = torch.tensor([[True], [False], [True]])
-        a = torch.tensor([[1., 2., 3.], [4., 5., 6.], [7., 8., 9.]])
+        a = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
         result = torch.vmap(fn)(preds, a)
-        expected = torch.tensor([[2., 3., 4.], [8., 10., 12.], [8., 9., 10.]])
+        expected = torch.tensor([[2.0, 3.0, 4.0], [8.0, 10.0, 12.0], [8.0, 9.0, 10.0]])
         self.assertEqual(result, expected)
 
     def test_cond_autograd_complex(self):
@@ -10308,6 +10491,17 @@ class TestHopSchema(TestCase):
         self.assertExpectedInline(
             str(schema),
             """cond(SymBool pred, Any true_fn, Any false_fn, Tensor operand0) -> ((Tensor))""",
+        )
+
+    def test_switch_gen_schema_tensor_inputs(self):
+        schema = torch.ops.higher_order.switch.gen_schema(
+            torch.tensor([0]),
+            (lambda x: x.sin(), lambda x: x.cos(), lambda x: x.abs()),
+            (torch.randn(3, 4),),
+        )
+        self.assertExpectedInline(
+            str(schema),
+            """switch(Tensor index, Any branch0, Any branch1, Any branch2, Tensor operand0) -> ((Tensor))""",
         )
 
     def test_while_loop_gen_schema_tensor_inputs(self):

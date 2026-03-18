@@ -4,7 +4,7 @@ import contextlib
 import functools
 import logging
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any, Optional, Union
 
 import torch
@@ -31,7 +31,7 @@ from torch._higher_order_ops.utils import (
     validate_subgraph_args_types,
 )
 from torch._ops import HigherOrderOperator
-from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import ProxyTorchDispatchMode, track_tensor_tree
 from torch.utils._python_dispatch import _get_current_dispatch_mode
 
@@ -45,6 +45,7 @@ class SwitchOp(HigherOrderOperator):
 
     def __call__(self, index, branches, operands):
         validate_subgraph_args_types(operands)
+        # pyrefly: ignore [missing-attribute]
         return super().__call__(index, branches, operands)
 
     # pyrefly: ignore [bad-override]
@@ -52,7 +53,9 @@ class SwitchOp(HigherOrderOperator):
         from torch._higher_order_ops.schema import HopSchemaGenerator
         from torch._higher_order_ops.utils import materialize_as_graph
 
-        branch_gms: List[torch.fx.GraphModule] = [materialize_as_graph(fn, operands) for fn in branches]
+        branch_gms: list[torch.fx.GraphModule] = [
+            materialize_as_graph(fn, operands) for fn in branches
+        ]
         mutated_inputs = set()
         for gm in branch_gms:
             (
@@ -71,7 +74,7 @@ class SwitchOp(HigherOrderOperator):
         for idx, arg in enumerate(operands):
             schema_gen.add_arg(f"operand{idx}", arg, is_mutated=idx in mutated_inputs)
 
-        for out in branch_outputs: # NOTE: we're using the output from the last branch
+        for out in branch_outputs:  # NOTE: we're using the output from the last branch
             schema_gen.add_output(out)
         schema_gen.add_schema_tree_spec(index, branches, operands)
         return schema_gen.gen_schema()
@@ -88,6 +91,13 @@ def switch(
 ) -> Any:
     r"""
     Selects and runs one of N branch functions by index.
+
+    .. warning::
+
+        `torch.switch` is a prototype feature in PyTorch. It has limited support for input and
+        output types. Please look forward to a more stable implementation in a future version of
+        PyTorch. Read more about feature classification at:
+        https://pytorch.org/blog/pytorch-feature-classification-changes/#prototype
 
     Equivalent to: branches[index](*operands) with index in [0, len(branches)).
 
@@ -120,29 +130,43 @@ def switch(
                 UserWarning,
                 stacklevel=2,
             )
-        # This is the eager case. We can just run the relevant branch
-        clamped_index = min(max(0, index), len(branches)-1)
+        # This is the eager case. We can just run the relevant branch.
+        # Clamp out-of-range indices rather than raising for consistency with compiled behavior.
+        clamped_index = min(max(0, index), len(branches) - 1)
         return branches[clamped_index](*operands)
+
+    # If inside a functorch transform (e.g. vmap) with a batched index, dispatch
+    # directly to let the vmap batch rule handle it rather than going through
+    # torch.compile which cannot handle batched tensors as arguments.
+    if isinstance(index, torch.Tensor) and is_batchedtensor(index):
+        result = switch_op(index, branches, operands)
+        # The vmap batch rule always returns a tuple; unwrap for single-output branches
+        # to match switch_op_dense's behavior of returning whatever the branch returns.
+        if isinstance(result, tuple) and len(result) == 1:
+            return result[0]
+        return result
 
     def _validate_input(index, branches, operands):
         if not isinstance(index, (int, torch.Tensor, torch.SymInt)):
-            raise RuntimeError(f"Expected index to be an int or tensor, but got {index}.")
+            raise RuntimeError(
+                f"Expected index to be an int or tensor, but got {index}."
+            )
 
         if isinstance(index, torch.Tensor) and index.numel() != 1:
             raise RuntimeError(
                 f"Expected index to be int or single-element tensor, but got {index}."
             )
 
-        # index_item = index.item() if isinstance(index, torch.Tensor) else index
-        # if index_item < 0 or index_item >= len(branches):
-        #     raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {index_item}.")
-
         if not isinstance(branches, (tuple, list)) or len(branches) == 0:
-            raise RuntimeError("Expected branches to be a non-empty tuple or list of callables.")
+            raise RuntimeError(
+                "Expected branches to be a non-empty tuple or list of callables."
+            )
 
         for i, branch in enumerate(branches):
             if not callable(branch):
-                raise RuntimeError(f"Expected all branches to be callable. branch{i} is not callable.")
+                raise RuntimeError(
+                    f"Expected all branches to be callable. branch{i} is not callable."
+                )
 
         if not isinstance(operands, (tuple, list)) or pytree.tree_any(
             lambda t: not isinstance(t, torch.Tensor), operands
@@ -176,7 +200,9 @@ def trace_switch(proxy_mode, func_overload, index, branches, operands):
             f"Switch operands must be a list or tuple of tensors and SymInts {operands}"
         )
     if not isinstance(branches, (list, tuple)) or len(branches) == 0:
-        raise AssertionError("Switch branches must be a non-empty list or tuple of callables")
+        raise AssertionError(
+            "Switch branches must be a non-empty list or tuple of callables"
+        )
 
     branch_graphs = [reenter_make_fx(branch)(*operands) for branch in branches]
 
@@ -221,20 +247,18 @@ def switch_op_dense(index, branches, operands):
     mode = _get_current_dispatch_mode()
     if mode is not None:
         raise AssertionError("Mode should never be enabled for CPU/CUDA key")
-    idx = index.item() if isinstance(index, torch.Tensor) else int(index)
-    # if idx < 0 or idx >= len(branches):
-    #     raise RuntimeError(f"switch index must be in [0, {len(branches)}), got {idx}")
+    idx: int = int(index.item() if isinstance(index, torch.Tensor) else int(index))
+    # Clamp out-of-range indices rather than raising for consistency with compiled behavior.
     clamped_idx = min(max(0, idx), len(branches) - 1)
     return branches[clamped_idx](*operands)
 
 
 class SwitchAutogradOp(torch.autograd.Function):
     @staticmethod
+    # pyrefly: ignore [bad-override]
     def forward(ctx, index, branches, *operands):
         ctx._index = index
-        ctx._branch_bw_fns = [
-            create_bw_fn(fn, operands) for fn in branches
-        ]
+        ctx._branch_bw_fns = [create_bw_fn(fn, operands) for fn in branches]
         # We snapshot the dispatch keys in forward for materializing the
         # the bw_graph in backward.
         ctx._fw_include_key_set = torch._C._dispatch_tls_local_include_set()
@@ -304,7 +328,9 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
         ignore_fresh_unbacked = mode.shape_env.ignore_fresh_unbacked_symbols()
 
     with mode, ignore_fresh_unbacked:
-        flat_branch_outs, branch_out_spec = zip(*[pytree.tree_flatten(branch(*operands)) for branch in branches])
+        flat_branch_outs, branch_out_spec = zip(
+            *[pytree.tree_flatten(branch(*operands)) for branch in branches]
+        )
         for i, spec in enumerate(branch_out_spec):
             if branch_out_spec[0] != spec:
                 raise RuntimeError(
@@ -318,34 +344,30 @@ def switch_fake_tensor_mode(mode, index, branches, operands):
     return pytree.tree_unflatten(merged_outs, branch_out_spec[0])
 
 
-def check_tensor_meta_match(
-    tensors: tuple[torch.Tensor, ...], attr_names: tuple[str, ...], msg_prefix: str
-) -> None:
-    def _get_attr_maybe_call(t: torch.Tensor, attr_name: str) -> Any:
-        attr = getattr(t, attr_name)
-        if callable(attr):
-            return attr()
-        return attr
-
-    for attr_name in attr_names:
-        attrs = [_get_attr_maybe_call(t, attr_name) for t in tensors]
-        for a, b in itertools.pairwise(attrs):
-            torch._check(
-                a == b,
-                lambda: f"{msg_prefix} expected same {attr_name} but got {a} and {b}.",
-            )
-
-
 def _merge_output(
-    xs: tuple[Optional[Union[torch.Tensor, int]], ...],
-    mode: FakeTensorMode
+    xs: tuple[Optional[Union[torch.Tensor, int]], ...], mode: FakeTensorMode
 ):
     from torch._higher_order_ops.cond import _merge_output as cond_merge_output
+
     return functools.reduce(lambda a, b: cond_merge_output(a, b, mode), xs)
+
 
 @switch_op.py_functionalize_impl
 def switch_func(ctx, index, branches, inputs):
-    from torch._higher_order_ops.utils import _check_alias_and_mutation
+    from torch._higher_order_ops.auto_functionalize import (
+        can_auto_functionalize,
+        do_auto_functionalize_v2,
+    )
+    from torch._higher_order_ops.utils import _check_alias_and_mutation, HopInstance
+
+    hop_instance = HopInstance.create(switch_op, index, branches, inputs)
+    if can_auto_functionalize(hop_instance) and hasattr(ctx, "mode"):
+        return do_auto_functionalize_v2(
+            ctx.mode,
+            hop_instance,
+            tuple(pytree.tree_flatten((index, branches, inputs))[0]),
+            {},
+        )
 
     unwrapped_inputs = ctx.unwrap_tensors(inputs)
     unwrapped_index = ctx.unwrap_tensors(index)
@@ -392,10 +414,8 @@ def switch_batch_rule(interpreter, index, branches, inputs):
         in_dims = (0,) + in_dims
 
         def fn(idx, *args):
-            branch_outs = torch.stack(
-                tuple(branch(*args)[0] for branch in branches)
-            )
-            return branch_outs[torch.clamp(idx, 0, len(branches)).squeeze()]
+            branch_outs = torch.stack(tuple(branch(*args) for branch in branches))
+            return branch_outs[torch.clamp(idx, 0, len(branches) - 1).squeeze()]
 
         with interpreter.lower():
             result = torch.vmap(fn, in_dims=in_dims)(*tensors)
