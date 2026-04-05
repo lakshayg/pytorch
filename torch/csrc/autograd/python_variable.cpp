@@ -1488,7 +1488,7 @@ static bool sets_intersect(
     return sets_intersect(bigger, smaller);
   }
   for (const auto& item : smaller) {
-    if (bigger.find(item) != bigger.end()) {
+    if (bigger.contains(item)) {
       return true;
     }
   }

@@ -641,8 +641,8 @@ class AOTInductorModelContainer {
       const std::shared_ptr<ConstantMap>& constants_map) {
     auto num_constants = models_[0]->num_constants();
     for (size_t idx = 0; idx < num_constants; idx++) {
-      if (constants_map->find(models_[0]->constant_name(
-              static_cast<int64_t>(idx))) != constants_map->end()) {
+      if (constants_map->contains(
+              models_[0]->constant_name(static_cast<int64_t>(idx)))) {
         constants_array->at(idx) = ConstantHandle(
             constants_map
                 ->find(models_[0]->constant_name(static_cast<int64_t>(idx)))

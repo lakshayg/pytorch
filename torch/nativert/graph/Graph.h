@@ -293,7 +293,7 @@ class Node : public c10::IntrusiveListHook {
   void applyDevicePlacement(const Placement& placement);
 
   std::optional<std::string_view> getMetadata(std::string_view key) const {
-    return metadata_.find(std::string{key}) != metadata_.end()
+    return metadata_.contains(std::string{key})
         ? std::optional(std::string_view{metadata_.at(std::string{key})})
         : std::nullopt;
   }

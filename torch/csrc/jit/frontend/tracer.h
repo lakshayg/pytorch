@@ -116,7 +116,7 @@ struct ArgumentStash {
       const Variable& var);
 
   static bool hasIntArrayRef(const std::string& arg_name) {
-    return stash.intlists.count(arg_name) > 0;
+    return stash.intlists.contains(arg_name);
   }
 
   static IntArrayRefTrace popIntArrayRef(const std::string& arg_name) {
@@ -135,7 +135,7 @@ struct ArgumentStash {
       const c10::TypePtr& type = nullptr);
 
   static bool hasValue(const std::string& arg_name) {
-    return stash.values.count(arg_name) > 0;
+    return stash.values.contains(arg_name);
   }
 
   static Value* popValue(const std::string& arg_name) {
