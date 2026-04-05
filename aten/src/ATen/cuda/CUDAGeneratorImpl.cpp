@@ -149,9 +149,7 @@ void CUDAGeneratorState::register_graph(cuda::CUDAGraph* graph) {
 
   // Insert the graph into the set of registered graphs if it's not already
   // registered.
-  if (registered_graphs_.find(graph) == registered_graphs_.end()) {
-    registered_graphs_.insert(graph);
-  }
+  registered_graphs_.insert(graph);
 }
 
 /**
