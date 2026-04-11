@@ -102,8 +102,8 @@ struct NormalFill16 {
       const opmath_t u2 = data[j + 8];
       const opmath_t radius = std::sqrt(-2 * std::log(u1));
       const opmath_t theta = 2.0f * c10::pi<double> * u2;
-      data[j] = radius * std::cos(theta) * std_ + mean_;
-      data[j + 8] = radius * std::sin(theta) * std_ + mean_;
+      data[j] = std::fma(radius * std::cos(theta), std_, mean_);
+      data[j + 8] = std::fma(radius * std::sin(theta), std_, mean_);
     }
   }
 };
