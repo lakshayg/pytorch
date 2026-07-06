@@ -142,6 +142,9 @@ def build_summary(snippets: list[Snippet], steps: list[Snippet], hook: str) -> s
         lines.append(f"step {step['name']}: {fmt_seconds(step['duration'])}{result}")
 
     targets: dict[str, dict[str, float]] = {}
+    # A target can have several link-role snippets for the same artifact
+    # (e.g. the LINK_WHAT_YOU_USE check); count each output file once.
+    sized_outputs: set[str] = set()
     for s in by_role.get("compile", []) + by_role.get("link", []):
         stats = targets.setdefault(
             snippet_target(s) or "<unknown>",
@@ -152,7 +155,10 @@ def build_summary(snippets: list[Snippet], steps: list[Snippet], hook: str) -> s
             stats["compile"] += s["duration"]
         else:
             stats["link"] += s["duration"]
-            stats["size"] += sum(s.get("outputSizes", []))
+            for out, size in zip(s.get("outputs", []), s.get("outputSizes", [])):
+                if out not in sized_outputs:
+                    sized_outputs.add(out)
+                    stats["size"] += size
     if targets:
         lines.append("")
         header = f"{'target':<40} {'files':>6} {'compile':>10} {'link':>8} {'size':>9}"
