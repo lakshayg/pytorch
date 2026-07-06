@@ -7,7 +7,8 @@
 # data under <build>/build_profile/runs/<index>/:
 #   - summary.txt   per-target compile/link/install/custom timing table
 #                   (also printed to the terminal)
-#   - trace.json    Chrome trace; open in https://ui.perfetto.dev
+#   - trace.json    CMake-generated Google trace; open in
+#                   https://ui.perfetto.dev
 #   - raw snippet files as emitted by CMake
 #
 # Build steps that Ninja folds into another edge (e.g. POST_BUILD commands,
@@ -20,8 +21,8 @@
 #     COMMAND ${_launcher} <real command...> VERBATIM)
 #
 # The launcher expands to nothing when instrumentation is off, so call sites
-# need no guards. Requires CMake >= 4.0 (experimental before 4.3) and the
-# Ninja or Makefiles generators.
+# need no guards. Requires CMake >= 4.3 and the Ninja or Makefiles
+# generators.
 
 option(USE_CMAKE_INSTRUMENTATION "Collect a build time profile via the CMake instrumentation API" OFF)
 
@@ -57,8 +58,8 @@ if(NOT USE_CMAKE_INSTRUMENTATION)
   return()
 endif()
 
-if(CMAKE_VERSION VERSION_LESS 4.0)
-  message(WARNING "USE_CMAKE_INSTRUMENTATION requires CMake >= 4.0 "
+if(CMAKE_VERSION VERSION_LESS 4.3)
+  message(WARNING "USE_CMAKE_INSTRUMENTATION requires CMake >= 4.3 "
                   "(found ${CMAKE_VERSION}); disabling.")
   set(USE_CMAKE_INSTRUMENTATION OFF)
   return()
@@ -71,25 +72,21 @@ if(NOT CMAKE_GENERATOR MATCHES "Ninja|Makefiles" OR WIN32)
   return()
 endif()
 
-# Instrumentation is experimental before CMake 4.3: it must be unlocked with
-# a version-specific UUID, and the install/test hooks have older names.
-set(_instrumentation_install_hook postCMakeInstall)
-if(CMAKE_VERSION VERSION_LESS 4.2)
-  set(CMAKE_EXPERIMENTAL_INSTRUMENTATION "a37d1069-1972-4901-b9c9-f194aaf2b6e0")
-  set(_instrumentation_install_hook postInstall)
-elseif(CMAKE_VERSION VERSION_LESS 4.3)
-  set(CMAKE_EXPERIMENTAL_INSTRUMENTATION "ec7aa2dc-b87f-45a3-8022-fe01c5f59984")
-endif()
-
 # postGenerate reports configure/generate timing right after configure.
-# postBuild covers direct ninja/make runs, including the pip flow which
-# installs via `cmake --build . --target install`; postCMakeBuild and the
-# install hook cover `cmake --build` / `cmake --install` wrappers. Indexes
-# with no new data are ignored by the callback.
+# postBuild covers direct ninja/make runs; postCMakeBuild covers `cmake
+# --build`, which is what the pip flow uses (`cmake --build . --target
+# install`, so its install scripts land in the same index). postCMakeInstall
+# covers standalone `cmake --install`. The pre* hooks sweep snippets left
+# over from interrupted builds into their own run so they don't skew the
+# next build's profile. Indexes with no new data are ignored by the
+# callback.
 cmake_instrumentation(
   API_VERSION 1
   DATA_VERSION 1
-  HOOKS postGenerate postBuild postCMakeBuild ${_instrumentation_install_hook}
+  HOOKS postGenerate preBuild postBuild preCMakeBuild postCMakeBuild
+        postCMakeInstall
+  OPTIONS trace staticSystemInformation
   CALLBACK "${Python_EXECUTABLE}" "${_TORCH_INSTRUMENTATION_SCRIPT}" collect
            --out-dir "${_TORCH_INSTRUMENTATION_OUT_DIR}"
+           --src-dir "${CMAKE_SOURCE_DIR}"
 )
