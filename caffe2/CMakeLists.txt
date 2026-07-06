@@ -1,3 +1,7 @@
+# The codegen custom commands in this directory declare too many outputs for
+# the build profiling launcher (see cmake/Instrumentation.cmake).
+torch_instrumentation_disable_custom_commands()
+
 # ---[ Generate and install header and cpp files
 include(../cmake/Codegen.cmake)
 

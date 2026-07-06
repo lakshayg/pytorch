@@ -23,6 +23,9 @@ find_package(Python COMPONENTS Interpreter REQUIRED)
 # unconditionally.
 include(cmake/EnvVarForwarding.cmake)
 
+# Opt-in build time profiling (USE_CMAKE_INSTRUMENTATION).
+include(cmake/Instrumentation.cmake)
+
 # Pre-build steps: submodule init, NCCL checkout.
 # When built via setup.py, these are handled by build_deps() in setup.py;
 # the module checks for existing state, so it is safe to include
