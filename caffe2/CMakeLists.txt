@@ -1743,6 +1743,10 @@ if(USE_XPU)
   target_link_libraries(torch PUBLIC torch_xpu_library)
 endif()
 
+target_link_options_if_supported(torch_cpu "--emit-relocs")
+target_link_options_if_supported(torch_cuda "--emit-relocs")
+target_link_options_if_supported(torch "--emit-relocs")
+
 if(PRINT_CMAKE_DEBUG_INFO)
   print_target_properties(torch)
   print_target_properties(torch_cpu)

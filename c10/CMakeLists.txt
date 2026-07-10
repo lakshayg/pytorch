@@ -47,6 +47,7 @@ set(C10_USE_ROCM_KERNEL_ASSERT ${USE_ROCM_KERNEL_ASSERT})  # also used in torch/
 if(NOT BUILD_LIBTORCHLESS)
   add_library(c10 ${C10_SRCS} ${C10_HEADERS})
   torch_compile_options(c10)
+  target_link_options_if_supported(c10 "--emit-relocs")
   if(HAVE_SOVERSION)
     set_target_properties(c10 PROPERTIES
         VERSION ${TORCH_VERSION} SOVERSION ${TORCH_SOVERSION})

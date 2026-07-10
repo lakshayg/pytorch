@@ -816,6 +816,11 @@ else()
   endif()
 endif()
 
+append_cxx_flag_if_supported("-fno-plt" CMAKE_CXX_FLAGS)
+append_cxx_flag_if_supported("-fno-reorder-blocks-and-partition" CMAKE_CXX_FLAGS)
+append_c_flag_if_supported("-fno-plt" CMAKE_C_FLAGS)
+append_c_flag_if_supported("-fno-reorder-blocks-and-partition" CMAKE_C_FLAGS)
+
 # Build libtorch mobile library, which contains ATen/TH ops and native support
 # for TorchScript model, but doesn't contain not-yet-unified caffe2 ops;
 if(INTERN_BUILD_MOBILE)
