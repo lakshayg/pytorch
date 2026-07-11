@@ -60,6 +60,7 @@ set(CUDA_LINK_LIBRARIES_KEYWORD PRIVATE)
 if(NOT BUILD_LIBTORCHLESS)
   torch_cuda_based_add_library(c10_cuda ${C10_CUDA_SRCS} ${C10_CUDA_HEADERS})
   torch_compile_options(c10_cuda)
+  target_link_options_if_supported(c10_cuda "--emit-relocs")
   set(CUDA_LINK_LIBRARIES_KEYWORD)
   # If building shared library, set dllimport/dllexport proper.
   target_compile_options(c10_cuda PRIVATE "-DC10_CUDA_BUILD_MAIN_LIB")
