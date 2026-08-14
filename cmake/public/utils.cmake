@@ -577,6 +577,7 @@ function(torch_optimize_layout_if_enabled tgt)
     # BOLT needs --emit-relocs. This flag increases the binary size so we
     # scope it to bolt optimized targets rather than applying globally.
     target_link_options_if_supported(${tgt} "--emit-relocs")
+    target_link_options_if_supported(${tgt} "-z,now")
 
     find_file(
       _bolt_profile
@@ -605,7 +606,7 @@ function(torch_optimize_layout_if_enabled tgt)
       COMMAND "${LLVM_BOLT_EXECUTABLE}" "${_prebolt}"
               -o "$<TARGET_FILE:${tgt}>"
               "-data=${_bolt_profile}" "-log-file=${_logfile}"
-              -lite -infer-stale-profile
+              -lite -infer-stale-profile -plt=hot
               -reorder-blocks=ext-tsp -reorder-functions=cdsort
               -split-functions -split-all-cold -split-eh -dyno-stats
               --update-debug-sections
