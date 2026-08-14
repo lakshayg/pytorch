@@ -911,7 +911,6 @@ if(USE_LLVM_BOLT)
   # libraries that are actually optimized by BOLT instead of applying globally
   # (see torch_optimize_layout_if_enabled)
   list(APPEND _bolt_flags
-    "-fno-plt" # shows a perf boost in NVIDIA internal CI
     "-fno-jump-tables"    # disable jump tables since BOLT skips such functions
     "-fno-reorder-blocks-and-partition" # required by BOLT when using GCC>=8
   )
