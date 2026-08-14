@@ -540,13 +540,6 @@ if(USE_CMAKE_INSTRUMENTATION)
 endif()
 cmake_dependent_option(USE_KLEIDIAI "Use KleidiAI for the ARM CPU & AARCH64 architecture." ON
                         "CPU_AARCH64" OFF)
-# prioritized text linker, ON by default for AArch64+Linux, option visible to all AArch64, x86 and ppc64le.
-set(USE_PRIORITIZED_TEXT_DEFAULT OFF)
-if(LINUX AND CPU_AARCH64)
-  set(USE_PRIORITIZED_TEXT_DEFAULT ON)
-endif()
-cmake_dependent_option(USE_PRIORITIZED_TEXT_FOR_LD "Use prioritized text linker for ld."
-  "${USE_PRIORITIZED_TEXT_DEFAULT}" "CPU_INTEL OR CPU_AARCH64 OR CPU_POWER" OFF)
 
 # LLVM BOLT post-link binary optimization. Visible on AArch64, x86 and ppc64le.
 # Defaults ON for aarch64+linux+CUDA builds that also apply the linker script
@@ -562,7 +555,7 @@ endfunction()
 find_program(LLVM_BOLT_EXECUTABLE NAMES llvm-bolt VALIDATOR check_llvm_bolt_version)
 
 set(USE_LLVM_BOLT_DEFAULT OFF)
-if(LINUX AND USE_CUDA AND CPU_AARCH64 AND USE_PRIORITIZED_TEXT_FOR_LD AND LLVM_BOLT_EXECUTABLE)
+if(LINUX AND USE_CUDA AND CPU_AARCH64 AND LLVM_BOLT_EXECUTABLE)
   set(USE_LLVM_BOLT_DEFAULT ON)
 endif()
 cmake_dependent_option(USE_LLVM_BOLT "Optimize libraries with LLVM BOLT."
@@ -912,34 +905,6 @@ if(NOT DEFINED USE_BLAS)
   set(USE_BLAS ON)
 endif()
 
-# Prioritized Text Linker Optimization
-if(USE_PRIORITIZED_TEXT_FOR_LD)
-  append_cxx_flag_if_supported("-ffunction-sections" CMAKE_CXX_FLAGS)
-  append_cxx_flag_if_supported("-fdata-sections" CMAKE_CXX_FLAGS)
-  append_c_flag_if_supported("-ffunction-sections" CMAKE_C_FLAGS)
-  append_c_flag_if_supported("-fdata-sections" CMAKE_C_FLAGS)
-
-  set(LINKER_SCRIPT_FILE_IN "${CMAKE_SOURCE_DIR}/cmake/prioritized_text.txt")
-  set(LINKER_SCRIPT_FILE_OUT "${CMAKE_SOURCE_DIR}/cmake/linker_script.ld")
-  set(LINKER_SCRIPT_PATH "${CMAKE_SOURCE_DIR}/tools/setup_helpers/generate_linker_script.py")
-  add_custom_command(
-    OUTPUT "${LINKER_SCRIPT_FILE_OUT}"
-    COMMAND ${Python_EXECUTABLE}
-            "${LINKER_SCRIPT_PATH}"
-            --filein "${LINKER_SCRIPT_FILE_IN}"
-            --fout   "${LINKER_SCRIPT_FILE_OUT}"
-    DEPENDS "${LINKER_SCRIPT_PATH}"
-            "${LINKER_SCRIPT_FILE_IN}"
-    VERBATIM
-  )
-  add_custom_target(generate_linker_script DEPENDS "${LINKER_SCRIPT_FILE_OUT}")
-elseif(LINUX AND CPU_AARCH64)
-  message(WARNING [[
-  It is strongly recommend to enable linker script optimization for all AArch64 Linux builds.
-  To do so please export USE_PRIORITIZED_TEXT_FOR_LD=1
-  ]])
-endif()
-
 if(USE_LLVM_BOLT)
   # In addition to the flags below, BOLT also requires --emit-relocs for the
   # linker. Since --emit-relocs increases the binary size, we limit the use to
@@ -962,6 +927,11 @@ if(USE_LLVM_BOLT)
     file(ARCHIVE_EXTRACT INPUT "${CMAKE_SOURCE_DIR}/cmake/bolt_profiles/torch.tar.zst"
          DESTINATION "${LLVM_BOLT_PROFILES_DIR}")
   endif()
+elseif(LINUX AND CPU_AARCH64)
+  message(WARNING [[
+  It is strongly recommend to enable llvm-bolt optimization for all AArch64 Linux builds.
+  To do so please export USE_LLVM_BOLT=1 and ensure llvm-bolt>=21 is available.
+  ]])
 endif()
 
 # Build libtorch mobile library, which contains ATen/TH ops and native support
