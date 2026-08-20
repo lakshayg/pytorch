@@ -1107,7 +1107,7 @@ cmake_dependent_option(
 cmake_dependent_option(
   USE_CMAKE_INSTRUMENTATION
   "Use cmake-instrumentation to collect build metrics"
-  OFF # disabled by default because it causes CI timeouts
+  ${CPU_INTEL} # enabled by default only on x86-64
   "CMAKE_VERSION VERSION_GREATER_EQUAL 4.3"
   OFF
 )
