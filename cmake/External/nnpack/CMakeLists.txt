@@ -1,7 +1,4 @@
-if(__NNPACK_INCLUDED)
-  return()
-endif()
-set(__NNPACK_INCLUDED TRUE)
+set(NNPACK_FOUND FALSE PARENT_SCOPE)
 
 if(NOT USE_NNPACK)
   return()
@@ -19,7 +16,7 @@ endif()
 
 if(MSVC)
   message(WARNING "NNPACK not supported on MSVC yet. Turn this warning off by USE_NNPACK=OFF.")
-  set(USE_NNPACK OFF)
+  set(USE_NNPACK OFF PARENT_SCOPE)
   return()
 endif()
 
@@ -31,7 +28,7 @@ if(CMAKE_SYSTEM_PROCESSOR)
     message(WARNING "NNPACK is not supported on ${CMAKE_SYSTEM_PROCESSOR} processors. "
       "The only supported architectures are x86, x86-64, ARM, and ARM64. "
       "Turn this warning off by USE_NNPACK=OFF.")
-    set(USE_NNPACK OFF)
+    set(USE_NNPACK OFF PARENT_SCOPE)
     return()
   endif()
 endif()
@@ -83,15 +80,18 @@ if(ANDROID OR IOS OR ${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR ${CMAKE_SYSTEM_NAM
     set_property(TARGET nnpack PROPERTY POSITION_INDEPENDENT_CODE ON)
     set_property(TARGET pthreadpool PROPERTY POSITION_INDEPENDENT_CODE ON)
     set_property(TARGET cpuinfo PROPERTY POSITION_INDEPENDENT_CODE ON)
-
   endif()
 
-  set(NNPACK_FOUND TRUE)
+  set(NNPACK_FOUND TRUE PARENT_SCOPE)
   if(TARGET nnpack)
     set(NNPACK_INCLUDE_DIRS
       $<TARGET_PROPERTY:nnpack,INCLUDE_DIRECTORIES>
-      $<TARGET_PROPERTY:pthreadpool,INCLUDE_DIRECTORIES>)
-    set(NNPACK_LIBRARIES $<TARGET_OBJECTS:nnpack> $<TARGET_OBJECTS:cpuinfo>)
+      $<TARGET_PROPERTY:pthreadpool,INCLUDE_DIRECTORIES>
+      PARENT_SCOPE)
+    set(NNPACK_LIBRARIES
+      $<TARGET_OBJECTS:nnpack>
+      $<TARGET_OBJECTS:cpuinfo>
+      PARENT_SCOPE)
   endif()
   return()
 endif()
@@ -101,5 +101,5 @@ endif()
 ##############################################################################
 
 message(WARNING "Unknown platform - I don't know how to build NNPACK. "
-                "See cmake/External/nnpack.cmake for details.")
-set(USE_NNPACK OFF)
+                "See cmake/External/nnpack/CMakeLists.txt for details.")
+set(USE_NNPACK OFF PARENT_SCOPE)
