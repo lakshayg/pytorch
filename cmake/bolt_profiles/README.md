@@ -46,6 +46,12 @@ into a `prebolt/` subdirectory and `llvm-bolt` writes the optimized library
 back in its place. The build tree thus carries the optimized lib at the
 canonical path, while the unoptimized original is retained under `prebolt/`
 
+After optimizing each library, the build reads its YAML profile and prints a
+summary of its symbol count together with the matching, stale-profile inference,
+and ignored-function statistics reported by BOLT. These statistics make it
+easier to tell when the committed profiles no longer match the binaries closely
+and should be recollected.
+
 ## Profile collection
 
 Profiles must be collected on binaries built the BOLT-compatible

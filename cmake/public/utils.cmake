@@ -606,11 +606,11 @@ function(torch_optimize_layout_if_enabled tgt)
     # scope it to bolt optimized targets rather than applying globally.
     target_link_options_if_supported(${tgt} "--emit-relocs")
     set_property(TARGET ${tgt} APPEND PROPERTY LINK_DEPENDS "${_bolt_profile}")
-
     set(_logfile "${CMAKE_BINARY_DIR}/logs/llvm-bolt-lib${tgt}.txt")
     set(_prebolt "$<TARGET_FILE_DIR:${tgt}>/prebolt/$<TARGET_FILE_NAME:${tgt}>")
     add_custom_command(
       TARGET ${tgt} POST_BUILD
+      BYPRODUCTS "${_logfile}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${_logfile}>"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${_prebolt}>"
       COMMAND "${CMAKE_COMMAND}" -E rename "$<TARGET_FILE:${tgt}>" "${_prebolt}"
@@ -621,6 +621,9 @@ function(torch_optimize_layout_if_enabled tgt)
               -reorder-blocks=ext-tsp -reorder-functions=cdsort
               -split-functions -split-all-cold -split-eh -dyno-stats
               --update-debug-sections
+      COMMAND "${Python_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/bolt_profile_quality.py"
+              "${_bolt_profile}" "${_logfile}"
       COMMENT "Optimizing $<TARGET_FILE_NAME:${tgt}> with LLVM BOLT (original kept in prebolt/)"
       VERBATIM
     )
