@@ -483,6 +483,13 @@ cmake_dependent_option(
 cmake_dependent_option(BUILD_FUNCTORCH "Build Functorch" ON "BUILD_PYTHON" OFF)
 cmake_dependent_option(BUILD_BUNDLE_PTXAS "Bundle PTX into torch/bin folder"
                        OFF "USE_CUDA" OFF)
+cmake_dependent_option(
+  USE_CMAKE_INSTRUMENTATION
+  "Use cmake-instrumentation to collect build metrics"
+  ${CPU_INTEL} # enabled by default only on x86-64
+  "CMAKE_VERSION VERSION_GREATER_EQUAL 4.3"
+  OFF
+)
 cmake_dependent_option(USE_KLEIDIAI "Use KleidiAI for the ARM CPU & AARCH64 architecture." ON
                         "CPU_AARCH64" OFF)
 # prioritized text linker, ON by default for AArch64+Linux, option visible to all AArch64, x86 and ppc64le.
@@ -1104,13 +1111,6 @@ cmake_dependent_option(
   Will be disabled if not supported by the platform" ON
   "USE_CUDA OR USE_ROCM" OFF)
 
-cmake_dependent_option(
-  USE_CMAKE_INSTRUMENTATION
-  "Use cmake-instrumentation to collect build metrics"
-  ${CPU_INTEL} # enabled by default only on x86-64
-  "CMAKE_VERSION VERSION_GREATER_EQUAL 4.3"
-  OFF
-)
 if(USE_CMAKE_INSTRUMENTATION)
   cmake_instrumentation(
     API_VERSION 1
