@@ -586,9 +586,6 @@ function(torch_optimize_layout_if_enabled tgt)
   endif()
 
   if(USE_LLVM_BOLT)
-    # BOLT needs --emit-relocs. This flag increases the binary size so we
-    # scope it to bolt optimized targets rather than applying globally.
-    target_link_options_if_supported(${tgt} "--emit-relocs")
     find_file(
       _bolt_profile
       NAMES ${ARGN} "lib${tgt}.yaml"
@@ -596,10 +593,20 @@ function(torch_optimize_layout_if_enabled tgt)
       NO_DEFAULT_PATH
       NO_CMAKE_FIND_ROOT_PATH
       NO_CACHE
-      REQUIRED
     )
+    if(NOT _bolt_profile)
+      message(WARNING
+        "No BOLT profile found for ${tgt} in ${LLVM_BOLT_PROFILES_DIR}. "
+        "Skipping BOLT optimization for this target.")
+      return()
+    endif()
     message(STATUS "Using BOLT profile for ${tgt}: ${_bolt_profile}")
+
+    # BOLT needs --emit-relocs. This flag increases the binary size so we
+    # scope it to bolt optimized targets rather than applying globally.
+    target_link_options_if_supported(${tgt} "--emit-relocs")
     set_property(TARGET ${tgt} APPEND PROPERTY LINK_DEPENDS "${_bolt_profile}")
+
     set(_logfile "${CMAKE_BINARY_DIR}/logs/llvm-bolt-lib${tgt}.txt")
     set(_prebolt "$<TARGET_FILE_DIR:${tgt}>/prebolt/$<TARGET_FILE_NAME:${tgt}>")
     add_custom_command(

@@ -954,12 +954,14 @@ if(USE_LLVM_BOLT)
     append_cxx_flag_if_supported("${_flag}" CMAKE_CXX_FLAGS)
   endforeach()
 
-  # Extract the committed BOLT profiles for the build-time optimization
-  # step (torch_optimize_layout_if_enabled in cmake/public/utils.cmake).
-  set(LLVM_BOLT_PROFILES_DIR "${CMAKE_BINARY_DIR}/bolt_profiles")
-  file(REMOVE_RECURSE "${LLVM_BOLT_PROFILES_DIR}")
-  file(ARCHIVE_EXTRACT INPUT "${CMAKE_SOURCE_DIR}/cmake/bolt_profiles/torch.tar.zst"
-       DESTINATION "${LLVM_BOLT_PROFILES_DIR}")
+  if(NOT DEFINED LLVM_BOLT_PROFILES_DIR)
+    # Extract the committed BOLT profiles for the build-time optimization
+    # step (torch_optimize_layout_if_enabled in cmake/public/utils.cmake).
+    set(LLVM_BOLT_PROFILES_DIR "${CMAKE_BINARY_DIR}/bolt_profiles")
+    file(REMOVE_RECURSE "${LLVM_BOLT_PROFILES_DIR}")
+    file(ARCHIVE_EXTRACT INPUT "${CMAKE_SOURCE_DIR}/cmake/bolt_profiles/torch.tar.zst"
+         DESTINATION "${LLVM_BOLT_PROFILES_DIR}")
+  endif()
 endif()
 
 # Build libtorch mobile library, which contains ATen/TH ops and native support
