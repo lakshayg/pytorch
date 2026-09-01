@@ -938,10 +938,9 @@ elseif(LINUX AND CPU_AARCH64)
 endif()
 
 if(USE_LLVM_BOLT)
-  # In addition to the flags below, BOLT also requires --emit-relocs for the
-  # linker. Since --emit-relocs increases the binary size, we limit the use to
-  # libraries that are actually optimized by BOLT instead of applying globally
-  # (see torch_optimize_layout_if_enabled)
+  # BOLT needs relocation information preserved by the linker.
+  add_link_options_if_supported("--emit-relocs")
+
   list(APPEND _bolt_flags
     "-fno-plt" # shows a perf boost in NVIDIA internal CI
     "-fno-reorder-blocks-and-partition" # required by BOLT when using GCC>=8
