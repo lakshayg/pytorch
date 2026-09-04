@@ -565,9 +565,7 @@ function(target_link_options_if_supported tgt flag)
 endfunction()
 
 ##############################################################################
-# Apply binary layout optimization to ${tgt}. This includes using an
-# optimized symbol order (USE_PRIORITIZED_TEXT_FOR_LD) and post-link
-# optimization using LLVM BOLT (USE_LLVM_BOLT).
+# Apply binary layout optimization to ${tgt} using llvm-bolt.
 #
 # When USE_LLVM_BOLT is enabled, original libraries are moved to the
 # prebolt/ subdirectory and bolted libraries are written in their place.
@@ -575,20 +573,7 @@ endfunction()
 # torch_optimize_layout_if_enabled(<target> [<profile>...])
 # Falls back to lib<target>.yaml if specified profiles don't exist.
 function(torch_optimize_layout_if_enabled tgt)
-  if(USE_PRIORITIZED_TEXT_FOR_LD)
-    if(CMAKE_LINKER_TYPE STREQUAL "LLD")
-      target_link_options("${tgt}" PRIVATE "LINKER:--no-warn-symbol-ordering")
-      target_link_options("${tgt}" PRIVATE "LINKER:--symbol-ordering-file=${LINKER_SCRIPT_FILE_IN}")
-    else()
-      add_dependencies("${tgt}" generate_linker_script)
-      target_link_options("${tgt}" PRIVATE "LINKER:-T${LINKER_SCRIPT_FILE_OUT}")
-    endif()
-  endif()
-
   if(USE_LLVM_BOLT)
-    # BOLT needs --emit-relocs. This flag increases the binary size so we
-    # scope it to bolt optimized targets rather than applying globally.
-    target_link_options_if_supported(${tgt} "--emit-relocs")
     find_file(
       _bolt_profile
       NAMES ${ARGN} "lib${tgt}.yaml"
@@ -596,24 +581,39 @@ function(torch_optimize_layout_if_enabled tgt)
       NO_DEFAULT_PATH
       NO_CMAKE_FIND_ROOT_PATH
       NO_CACHE
-      REQUIRED
     )
+    if(NOT _bolt_profile)
+      message(WARNING
+        "No BOLT profile found for ${tgt} in ${LLVM_BOLT_PROFILES_DIR}. "
+        "Skipping BOLT optimization for this target.")
+      return()
+    endif()
     message(STATUS "Using BOLT profile for ${tgt}: ${_bolt_profile}")
+
+    # BOLT needs --emit-relocs. This flag increases the binary size so we
+    # scope it to bolt optimized targets rather than applying globally.
+    target_link_options_if_supported(${tgt} "--emit-relocs")
+    target_link_options_if_supported(${tgt} "-z,now")
     set_property(TARGET ${tgt} APPEND PROPERTY LINK_DEPENDS "${_bolt_profile}")
+
     set(_logfile "${CMAKE_BINARY_DIR}/logs/llvm-bolt-lib${tgt}.txt")
     set(_prebolt "$<TARGET_FILE_DIR:${tgt}>/prebolt/$<TARGET_FILE_NAME:${tgt}>")
     add_custom_command(
       TARGET ${tgt} POST_BUILD
+      BYPRODUCTS "${_logfile}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${_logfile}>"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<PATH:GET_PARENT_PATH,${_prebolt}>"
       COMMAND "${CMAKE_COMMAND}" -E rename "$<TARGET_FILE:${tgt}>" "${_prebolt}"
       COMMAND "${LLVM_BOLT_EXECUTABLE}" "${_prebolt}"
               -o "$<TARGET_FILE:${tgt}>"
               "-data=${_bolt_profile}" "-log-file=${_logfile}"
-              -lite -infer-stale-profile
+              -lite -infer-stale-profile -plt=hot
               -reorder-blocks=ext-tsp -reorder-functions=cdsort
               -split-functions -split-all-cold -split-eh -dyno-stats
               --update-debug-sections
+      COMMAND "${Python_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/bolt_profile_quality.py"
+              "${_bolt_profile}" "${_logfile}"
       COMMENT "Optimizing $<TARGET_FILE_NAME:${tgt}> with LLVM BOLT (original kept in prebolt/)"
       VERBATIM
     )

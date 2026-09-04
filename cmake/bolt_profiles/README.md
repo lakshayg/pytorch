@@ -1,8 +1,9 @@
 # LLVM BOLT profiles
 
 This directory holds the BOLT profiles consumed when building with
-`USE_LLVM_BOLT=ON`. The profiles are kept compressed in `torch.tar.zst` to keep
-the repo small; the build extracts them into the build tree at configure time.
+`USE_LLVM_BOLT=ON`. The profiles are kept compressed in `torch.tar.zst`
+to keep the repo small. The build extracts them into `build/bolt_profiles`
+at configure time if the user does not specify `LLVM_BOLT_PROFILES_DIR`.
 
 ## Archive contents
 
@@ -22,6 +23,15 @@ torch.tar.zst
 |_ libtorch_python-cpython-314t-aarch64-linux-gnu.yaml (optional)
 ```
 
+## Custom profiles
+
+Set `LLVM_BOLT_PROFILES_DIR` to use profiles from another directory instead
+of extracting the bundled archive.
+
+The directory may contain profiles for any subset of the BOLT-optimized
+libraries. If no matching profile is found for a target, CMake will emit
+a warning and skip BOLT optimization for that target.
+
 ## How profiles are consumed
 
 Optimization happens at build time, in `torch_optimize_layout_if_enabled`
@@ -35,6 +45,12 @@ Right after a library is linked, its freshly-linked `lib<name>.so` is moved
 into a `prebolt/` subdirectory and `llvm-bolt` writes the optimized library
 back in its place. The build tree thus carries the optimized lib at the
 canonical path, while the unoptimized original is retained under `prebolt/`
+
+After optimizing each library, the build reads its YAML profile and prints a
+summary of its symbol count together with the matching, stale-profile inference,
+and ignored-function statistics reported by BOLT. These statistics make it
+easier to tell when the committed profiles no longer match the binaries closely
+and should be recollected.
 
 ## Profile collection
 
