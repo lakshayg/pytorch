@@ -574,8 +574,24 @@ endfunction()
 # Falls back to lib<target>.yaml if specified profiles don't exist.
 function(torch_optimize_layout_if_enabled tgt)
   if(USE_LLVM_BOLT)
-    # BOLT needs --emit-relocs. This flag increases the binary size so we
-    # scope it to bolt optimized targets rather than applying globally.
+    set(_bolt_compile_flags
+      "-fno-jump-tables"    # disable jump tables since BOLT skips such functions
+      "-fno-reorder-blocks-and-partition" # required by BOLT when using GCC>=8
+    )
+    foreach(_flag IN LISTS _bolt_compile_flags)
+      set(_c_flag "")
+      append_c_flag_if_supported("${_flag}" _c_flag)
+      if(NOT "${_c_flag}" STREQUAL "")
+        target_compile_options(${tgt} PRIVATE "$<$<COMPILE_LANGUAGE:C>:${_flag}>")
+      endif()
+
+      set(_cxx_flag "")
+      append_cxx_flag_if_supported("${_flag}" _cxx_flag)
+      if(NOT "${_cxx_flag}" STREQUAL "")
+        target_compile_options(${tgt} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_flag}>")
+      endif()
+    endforeach()
+
     target_link_options_if_supported(${tgt} "--emit-relocs")
     target_link_options_if_supported(${tgt} "-z,now")
 

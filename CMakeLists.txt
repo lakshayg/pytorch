@@ -908,19 +908,6 @@ if(NOT DEFINED USE_BLAS)
 endif()
 
 if(USE_LLVM_BOLT)
-  # In addition to the flags below, BOLT also requires --emit-relocs for the
-  # linker. Since --emit-relocs increases the binary size, we limit the use to
-  # libraries that are actually optimized by BOLT instead of applying globally
-  # (see torch_optimize_layout_if_enabled)
-  list(APPEND _bolt_flags
-    "-fno-jump-tables"    # disable jump tables since BOLT skips such functions
-    "-fno-reorder-blocks-and-partition" # required by BOLT when using GCC>=8
-  )
-  foreach(_flag IN LISTS _bolt_flags)
-    append_c_flag_if_supported("${_flag}" CMAKE_C_FLAGS)
-    append_cxx_flag_if_supported("${_flag}" CMAKE_CXX_FLAGS)
-  endforeach()
-
   if(NOT DEFINED LLVM_BOLT_PROFILES_DIR)
     # Extract the committed BOLT profiles for the build-time optimization
     # step (torch_optimize_layout_if_enabled in cmake/public/utils.cmake).
