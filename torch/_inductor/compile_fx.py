@@ -1608,7 +1608,12 @@ class _InProcessFxCompile(FxCompile):
             def _fx_graph_runnable_payload() -> str:
                 fd = io.StringIO()
                 torch._dynamo.repro.after_aot.save_graph_repro(
-                    fd, gm, example_inputs, "inductor", save_dir=None
+                    fd,
+                    gm,
+                    example_inputs,
+                    "inductor",
+                    save_dir=None,
+                    is_inference=is_inference,
                 )
                 produced.append(fd.getvalue())
                 return produced[0]
@@ -1623,7 +1628,7 @@ class _InProcessFxCompile(FxCompile):
             )
             runnable_graph_str = produced[0] if produced else ""
 
-            V.debug.fx_graph(gm, example_inputs)
+            V.debug.fx_graph(gm, example_inputs, is_inference=is_inference)
             # TODO: Should we actually dump this?  It should be redundant with the aot
             # structured logs...
             # trace_structured("inductor_input_graph", payload_fn=lambda: gm.print_readable(print_output=False))
@@ -2226,6 +2231,12 @@ def cudagraphify(
 
     cudagraphify_fn: Callable[..., Any]
     if config.triton.cudagraph_trees:
+        managed_input_rerecord_limit = (
+            config.triton.cudagraph_managed_input_rerecord_limit
+        )
+        managed_input_rerecord_action = (
+            config.triton.cudagraph_managed_input_rerecord_action
+        )
         cudagraphify_fn = functools.partial(
             new_cudagraphify_impl,
             device_index=device_index,
@@ -2237,6 +2248,11 @@ def cudagraphify(
             mutated_input_idxs=mutated_input_idxs,
             kernel_free_cudagraph=kernel_free_cudagraph,
             user_visible_output_idxs=user_visible_output_idxs,
+            cudagraph_managed_input_rerecord_limit=managed_input_rerecord_limit,
+            cudagraph_managed_input_rerecord_action=managed_input_rerecord_action,
+            cudagraph_initial_mempool_allocation_gb=(
+                config.triton.cudagraph_initial_mempool_allocation_gb
+            ),
             compile_id=torch._guards.CompileContext.current_compile_id(),
         )
     else:
@@ -2729,6 +2745,7 @@ class CompilerConfigExtra:
 def create_compiler_config_extra(
     gm: GraphModule | GmWrapper,
 ) -> CompilerConfigExtra:
+    """Compute state shared by the AOT forward and backward compilers."""
     dynamo_graph_metadata = gm.meta if isinstance(gm, GraphModule) else None
 
     # Although cudagraphs may have been enabled via config, various

@@ -565,9 +565,7 @@ function(target_link_options_if_supported tgt flag)
 endfunction()
 
 ##############################################################################
-# Apply binary layout optimization to ${tgt}. This includes using an
-# optimized symbol order (USE_PRIORITIZED_TEXT_FOR_LD) and post-link
-# optimization using LLVM BOLT (USE_LLVM_BOLT).
+# Apply binary layout optimization to ${tgt} using llvm-bolt.
 #
 # When USE_LLVM_BOLT is enabled, original libraries are moved to the
 # prebolt/ subdirectory and bolted libraries are written in their place.
@@ -575,20 +573,28 @@ endfunction()
 # torch_optimize_layout_if_enabled(<target> [<profile>...])
 # Falls back to lib<target>.yaml if specified profiles don't exist.
 function(torch_optimize_layout_if_enabled tgt)
-  if(USE_PRIORITIZED_TEXT_FOR_LD)
-    if(CMAKE_LINKER_TYPE STREQUAL "LLD")
-      target_link_options("${tgt}" PRIVATE "LINKER:--no-warn-symbol-ordering")
-      target_link_options("${tgt}" PRIVATE "LINKER:--symbol-ordering-file=${LINKER_SCRIPT_FILE_IN}")
-    else()
-      add_dependencies("${tgt}" generate_linker_script)
-      target_link_options("${tgt}" PRIVATE "LINKER:-T${LINKER_SCRIPT_FILE_OUT}")
-    endif()
-  endif()
-
   if(USE_LLVM_BOLT)
-    # BOLT needs --emit-relocs. This flag increases the binary size so we
-    # scope it to bolt optimized targets rather than applying globally.
+    set(_bolt_compile_flags
+      "-fno-jump-tables"    # disable jump tables since BOLT skips such functions
+      "-fno-reorder-blocks-and-partition" # required by BOLT when using GCC>=8
+    )
+    foreach(_flag IN LISTS _bolt_compile_flags)
+      set(_c_flag "")
+      append_c_flag_if_supported("${_flag}" _c_flag)
+      if(NOT "${_c_flag}" STREQUAL "")
+        target_compile_options(${tgt} PRIVATE "$<$<COMPILE_LANGUAGE:C>:${_flag}>")
+      endif()
+
+      set(_cxx_flag "")
+      append_cxx_flag_if_supported("${_flag}" _cxx_flag)
+      if(NOT "${_cxx_flag}" STREQUAL "")
+        target_compile_options(${tgt} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_flag}>")
+      endif()
+    endforeach()
+
     target_link_options_if_supported(${tgt} "--emit-relocs")
+    target_link_options_if_supported(${tgt} "-z,now")
+
     find_file(
       _bolt_profile
       NAMES ${ARGN} "lib${tgt}.yaml"
@@ -596,10 +602,16 @@ function(torch_optimize_layout_if_enabled tgt)
       NO_DEFAULT_PATH
       NO_CMAKE_FIND_ROOT_PATH
       NO_CACHE
-      REQUIRED
     )
+    if(NOT _bolt_profile)
+      message(WARNING
+        "No BOLT profile found for ${tgt} in ${LLVM_BOLT_PROFILES_DIR}. "
+        "Skipping BOLT optimization for this target.")
+      return()
+    endif()
     message(STATUS "Using BOLT profile for ${tgt}: ${_bolt_profile}")
     set_property(TARGET ${tgt} APPEND PROPERTY LINK_DEPENDS "${_bolt_profile}")
+
     set(_logfile "${CMAKE_BINARY_DIR}/logs/llvm-bolt-lib${tgt}.txt")
     set(_prebolt "$<TARGET_FILE_DIR:${tgt}>/prebolt/$<TARGET_FILE_NAME:${tgt}>")
     add_custom_command(
@@ -610,7 +622,7 @@ function(torch_optimize_layout_if_enabled tgt)
       COMMAND "${LLVM_BOLT_EXECUTABLE}" "${_prebolt}"
               -o "$<TARGET_FILE:${tgt}>"
               "-data=${_bolt_profile}" "-log-file=${_logfile}"
-              -lite -infer-stale-profile
+              -lite -infer-stale-profile -plt=hot
               -reorder-blocks=ext-tsp -reorder-functions=cdsort
               -split-functions -split-all-cold -split-eh -dyno-stats
               --update-debug-sections
