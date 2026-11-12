@@ -980,6 +980,7 @@ if(USE_LLVM_BOLT)
   foreach(_flag IN LISTS _bolt_flags)
     append_c_flag_if_supported("${_flag}" CMAKE_C_FLAGS)
     append_cxx_flag_if_supported("${_flag}" CMAKE_CXX_FLAGS)
+    string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler ${_flag}")
   endforeach()
 
   if(NOT LLVM_BOLT_PROFILES_DIR)
